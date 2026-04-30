@@ -9,10 +9,12 @@ export interface Account {
     extra?: Record<string, string>;
 }
 
+/** Shared shape used for both pull/merge requests and issues/work items. */
 export interface PullItem {
     /** "#1234" or "PR-456" — what's shown in the tree. */
     id: string;
     title: string;
+    /** Author for PRs/MRs; primary assignee for issues/work items. */
     author: string;
     /** Human-readable repo identifier — "owner/repo" for GH, full path for GL/BB, "project/repo" for ADO. */
     repo: string;
@@ -23,6 +25,8 @@ export interface PullItem {
 }
 
 export interface ProviderClient {
-    /** Fetch open PRs/MRs for this account using the supplied token. */
+    /** Fetch open PRs/MRs the user is involved with. */
     listOpen(account: Account, token: string): Promise<PullItem[]>;
+    /** Fetch open issues / tickets / work items assigned to the authenticated user. */
+    listAssignedIssues(account: Account, token: string): Promise<PullItem[]>;
 }

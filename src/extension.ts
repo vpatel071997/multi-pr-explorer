@@ -82,9 +82,11 @@ export function deactivate(): void {
 }
 
 async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise<void> {
+    // ignoreFocusOut keeps each prompt open when the user alt-tabs to a browser
+    // to grab a token; without it the dropdown silently dismisses on focus loss.
     const provider = await vscode.window.showQuickPick(
         PROVIDERS.map(p => ({ label: p.label, provider: p })),
-        { placeHolder: "Provider" }
+        { placeHolder: "Provider", ignoreFocusOut: true }
     );
     if (!provider) {
         return;
@@ -94,6 +96,7 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
     const label = await vscode.window.showInputBox({
         prompt: "Account label (display only)",
         placeHolder: "e.g. Work, Personal, Acme",
+        ignoreFocusOut: true,
     });
     if (!label) {
         return;
@@ -102,6 +105,7 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
     const baseUrl = await vscode.window.showInputBox({
         prompt: "Base URL",
         value: p.defaultBaseUrl,
+        ignoreFocusOut: true,
     });
     if (!baseUrl) {
         return;
@@ -112,6 +116,7 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
         const ws = await vscode.window.showInputBox({
             prompt: "Bitbucket workspace slug",
             placeHolder: "e.g. acme-team",
+            ignoreFocusOut: true,
         });
         if (!ws) {
             return;
@@ -121,6 +126,7 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
         const org = await vscode.window.showInputBox({
             prompt: "Azure DevOps organization slug",
             placeHolder: "e.g. acme",
+            ignoreFocusOut: true,
         });
         if (!org) {
             return;
@@ -131,6 +137,7 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
     const token = await vscode.window.showInputBox({
         prompt: p.tokenPrompt,
         password: true,
+        ignoreFocusOut: true,
     });
     if (!token) {
         return;
@@ -168,7 +175,7 @@ async function removeAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Prom
             description: `${a.kind} • ${a.baseUrl}`,
             account: a,
         })),
-        { placeHolder: "Account to remove" }
+        { placeHolder: "Account to remove", ignoreFocusOut: true }
     );
     if (!pick) {
         return;

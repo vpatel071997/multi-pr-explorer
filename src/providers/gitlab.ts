@@ -9,6 +9,16 @@ interface MergeRequest {
     references: { full: string }; // "group/project!123"
 }
 
+interface Issue {
+    iid: number;
+    title: string;
+    author: { username: string };
+    assignees?: { username: string }[];
+    updated_at: string;
+    web_url: string;
+    references: { full: string }; // "group/project#123"
+}
+
 export class GitLabClient implements ProviderClient {
     async listOpen(account: Account, token: string): Promise<PullItem[]> {
         const base = account.baseUrl.replace(/\/+$/, "");
@@ -46,5 +56,25 @@ export class GitLabClient implements ProviderClient {
             }
         }
         return out;
+    }
+
+    async listAssignedIssues(account: Account, token: string): Promise<PullItem[]> {
+        const base = account.baseUrl.replace(/\/+$/, "");
+        const url = `${base}/api/v4/issues?scope=assigned_to_me&state=opened&per_page=100`;
+        const res = await fetch(url, {
+            headers: { "PRIVATE-TOKEN": token },
+        });
+        if (!res.ok) {
+            throw new Error(`GitLab ${res.status}: ${await res.text()}`);
+        }
+        const data = (await res.json()) as Issue[];
+        return data.map(i => ({
+            id: `#${i.iid}`,
+            title: i.title,
+            author: i.assignees?.[0]?.username ?? i.author.username,
+            repo: i.references.full.replace(/#[0-9]+$/, ""),
+            updated: i.updated_at,
+            url: i.web_url,
+        }));
     }
 }

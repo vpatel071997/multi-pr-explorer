@@ -61,4 +61,12 @@ export class BitbucketClient implements ProviderClient {
         }
         return out;
     }
+
+    async listAssignedIssues(_account: Account, _token: string): Promise<PullItem[]> {
+        // Bitbucket Cloud issues are per-repo and most workspaces don't enable
+        // them. Cross-workspace "assigned to me" requires enumerating every
+        // repo's issue tracker, which is expensive and rarely useful. v0.1
+        // returns empty rather than fanning out hundreds of API calls.
+        return [];
+    }
 }
