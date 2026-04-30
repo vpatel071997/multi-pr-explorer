@@ -150,7 +150,10 @@ export class AzureClient implements ProviderClient {
             "System.AssignedTo",
             "System.ChangedDate",
         ].join(",");
-        const wiUrl = `${base}/${encodeURIComponent(org)}/_apis/wit/workitems?ids=${ids}&fields=${encodeURIComponent(fields)}&api-version=7.1`;
+        // Project-scoped URL: matches Microsoft's "List Work Items" docs and
+        // is consistent with the project-scoped WIQL POST above. Some tenants
+        // with stricter access rules require the project segment.
+        const wiUrl = `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/workitems?ids=${ids}&fields=${encodeURIComponent(fields)}&api-version=7.1`;
         const wiRes = await fetch(wiUrl, { headers });
         if (!wiRes.ok) {
             throw new Error(`Azure DevOps workitems ${wiRes.status}: ${await wiRes.text()}`);
