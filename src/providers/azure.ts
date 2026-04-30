@@ -1,4 +1,4 @@
-import { Account, ProviderClient, PullItem, RepoRef } from "./types";
+import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
 
 interface AdoPullRequest {
     pullRequestId: number;
@@ -64,6 +64,27 @@ export class AzureClient implements ProviderClient {
 
     private auth(token: string): string {
         return "Basic " + Buffer.from(":" + token).toString("base64");
+    }
+
+    async verifyToken(account: Account, token: string): Promise<TokenStatus> {
+        try {
+            const org = account.extra?.organization;
+            if (!org) {
+                return { ok: false, error: "missing organization in account" };
+            }
+            const url = `${account.baseUrl.replace(/\/+$/, "")}/${encodeURIComponent(org)}/_apis/connectionData?api-version=7.1`;
+            const res = await fetch(url, { headers: { Authorization: this.auth(token), Accept: "application/json" } });
+            if (!res.ok) {
+                return { ok: false, error: `HTTP ${res.status}` };
+            }
+            const data = (await res.json()) as {
+                authenticatedUser?: { providerDisplayName?: string; customDisplayName?: string };
+            };
+            const u = data.authenticatedUser;
+            return { ok: true, user: u?.providerDisplayName ?? u?.customDisplayName ?? "?" };
+        } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
     }
 
     async listPullRequests(account: Account, _token: string, repo: RepoRef): Promise<PullItem[]> {

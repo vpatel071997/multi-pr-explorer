@@ -98,6 +98,10 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         vscode.commands.registerCommand("multiPrExplorer.manageIssueTrackers", () =>
             manageIssueTrackerFlow(tree)
         ),
+        vscode.commands.registerCommand("multiPrExplorer.testConnections", () => {
+            tree.refresh();
+            vscode.window.setStatusBarMessage("Multi-PR: re-testing all account tokens…", 3000);
+        }),
     );
 
     ctx.subscriptions.push(

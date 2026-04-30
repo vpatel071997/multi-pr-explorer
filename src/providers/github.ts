@@ -1,4 +1,4 @@
-import { Account, ProviderClient, PullItem, RepoRef } from "./types";
+import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
 
 interface PullRequestItem {
     number: number;
@@ -19,9 +19,23 @@ interface IssueItem {
     pull_request?: unknown;
 }
 
+/**
+ * Resolve the GitHub REST API root from the user-configured baseUrl.
+ *
+ *   github.com             → api.github.com           (cloud quirk: separate host)
+ *   ghe.acme.com           → ghe.acme.com/api/v3      (Enterprise, same host)
+ *   api.github.com         → as-is                    (user explicitly set the API URL)
+ *   anything ending /api/* → as-is                    (user gave full API path)
+ */
 function apiBase(baseUrl: string): string {
     const trimmed = baseUrl.replace(/\/+$/, "");
+    if (/\/api\/v\d+$/i.test(trimmed)) {
+        return trimmed;
+    }
     const host = trimmed.replace(/^https?:\/\//i, "").split("/")[0].toLowerCase();
+    if (host === "api.github.com") {
+        return trimmed;
+    }
     if (host === "github.com") {
         return "https://api.github.com";
     }
@@ -71,6 +85,20 @@ export class GitHubClient implements ProviderClient {
             Accept: "application/vnd.github+json",
             "User-Agent": "multi-pr-explorer",
         };
+    }
+
+    async verifyToken(account: Account, token: string): Promise<TokenStatus> {
+        try {
+            const url = `${apiBase(account.baseUrl)}/user`;
+            const res = await fetch(url, { headers: this.headers(token) });
+            if (!res.ok) {
+                return { ok: false, error: `HTTP ${res.status}` };
+            }
+            const data = (await res.json()) as { login: string };
+            return { ok: true, user: data.login };
+        } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
     }
 
     async listPullRequests(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {

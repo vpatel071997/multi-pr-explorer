@@ -1,4 +1,4 @@
-import { Account, ProviderClient, PullItem, RepoRef } from "./types";
+import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
 
 interface MergeRequest {
     iid: number;
@@ -56,6 +56,20 @@ export class GitLabClient implements ProviderClient {
 
     private headers(token: string): Record<string, string> {
         return { "PRIVATE-TOKEN": token };
+    }
+
+    async verifyToken(account: Account, token: string): Promise<TokenStatus> {
+        try {
+            const url = `${account.baseUrl.replace(/\/+$/, "")}/api/v4/user`;
+            const res = await fetch(url, { headers: this.headers(token) });
+            if (!res.ok) {
+                return { ok: false, error: `HTTP ${res.status}` };
+            }
+            const data = (await res.json()) as { username: string };
+            return { ok: true, user: data.username };
+        } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
     }
 
     async listPullRequests(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {

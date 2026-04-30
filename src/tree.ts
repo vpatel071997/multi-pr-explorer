@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { PullItem } from "./providers/types";
+import { Account, PullItem, TokenStatus } from "./providers/types";
 import { listAccounts } from "./config";
 import { TokenStore } from "./auth";
 import { getClient } from "./providers";
@@ -7,7 +7,25 @@ import { scanWorkspace, WorkspaceRepo, UnmatchedRepo } from "./workspace";
 
 type Section = "prs" | "issues";
 
-type TreeNode = RepoNode | UnmatchedNode | InfoNode | SectionNode | ItemNode | ErrorNode;
+type TreeNode =
+    | AccountsGroupNode
+    | AccountStatusNode
+    | RepoNode
+    | UnmatchedNode
+    | InfoNode
+    | SectionNode
+    | ItemNode
+    | ErrorNode;
+
+class AccountsGroupNode {
+    readonly type = "accounts-group";
+    constructor(public statuses: AccountStatusNode[]) {}
+}
+
+class AccountStatusNode {
+    readonly type = "account-status";
+    constructor(public account: Account, public status: TokenStatus) {}
+}
 
 class RepoNode {
     readonly type = "repo";
@@ -57,6 +75,8 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     private readonly _onDidChange = new vscode.EventEmitter<TreeNode | undefined | null | void>();
     readonly onDidChangeTreeData = this._onDidChange.event;
     private rootCache: TreeNode[] | null = null;
+    /** Auth status per account, populated in buildRoot. Reused by buildRepoNode. */
+    private statusByAccount = new Map<string, TokenStatus>();
 
     constructor(private readonly tokens: TokenStore) {}
 
@@ -67,6 +87,40 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
     getTreeItem(node: TreeNode): vscode.TreeItem {
         switch (node.type) {
+            case "accounts-group": {
+                const ok = node.statuses.filter(s => s.status.ok).length;
+                const t = new vscode.TreeItem(`Accounts (${ok} / ${node.statuses.length})`, vscode.TreeItemCollapsibleState.Expanded);
+                t.iconPath = new vscode.ThemeIcon("organization");
+                t.contextValue = "accounts-group";
+                t.tooltip = "Token authentication status for each configured account.\nClick Refresh to re-test.";
+                return t;
+            }
+            case "account-status": {
+                const t = new vscode.TreeItem(node.account.label, vscode.TreeItemCollapsibleState.None);
+                if (node.status.ok) {
+                    t.iconPath = new vscode.ThemeIcon("circle-filled", new vscode.ThemeColor("testing.iconPassed"));
+                    t.description = `${node.account.kind} • ${node.status.user ?? "ok"}`;
+                    t.tooltip = [
+                        node.account.label,
+                        `Provider: ${node.account.kind}`,
+                        `Base URL: ${node.account.baseUrl}`,
+                        `Authenticated as: ${node.status.user ?? "?"}`,
+                    ].join("\n");
+                } else {
+                    t.iconPath = new vscode.ThemeIcon("circle-filled", new vscode.ThemeColor("testing.iconFailed"));
+                    t.description = `${node.account.kind} • ${node.status.error ?? "failed"}`;
+                    t.tooltip = [
+                        node.account.label,
+                        `Provider: ${node.account.kind}`,
+                        `Base URL: ${node.account.baseUrl}`,
+                        `Error: ${node.status.error ?? "unknown"}`,
+                        "",
+                        "Run 'Multi-PR: Remove Account…' and re-add to update the token.",
+                    ].join("\n");
+                }
+                t.contextValue = "account-status";
+                return t;
+            }
             case "repo": {
                 const t = new vscode.TreeItem(node.repo.ref.displayName, vscode.TreeItemCollapsibleState.Expanded);
                 t.iconPath = new vscode.ThemeIcon("repo");
@@ -143,6 +197,9 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
             this.rootCache = await this.buildRoot();
             return this.rootCache;
         }
+        if (node.type === "accounts-group") {
+            return node.statuses;
+        }
         if (node.type === "repo") {
             return node.sections;
         }
@@ -157,15 +214,27 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         if (accounts.length === 0) {
             return [];
         }
+
+        // Verify all account tokens in parallel — populates statusByAccount and
+        // also drives the Accounts section icons.
+        const statusNodes = await Promise.all(accounts.map(async acc => {
+            const status = await this.verifyAccount(acc);
+            this.statusByAccount.set(acc.id, status);
+            return new AccountStatusNode(acc, status);
+        }));
+        const accountsGroup = new AccountsGroupNode(statusNodes);
+
         const folders = vscode.workspace.workspaceFolders ?? [];
         if (folders.length === 0) {
-            return [new InfoNode("Open a folder or workspace with a git remote to see its PRs and issues.")];
+            return [accountsGroup, new InfoNode("Open a folder or workspace with a git remote to see its PRs and issues.")];
         }
+
         const scan = await scanWorkspace(accounts);
         if (scan.repos.length === 0 && scan.unmatched.length === 0) {
-            return [new InfoNode("No git repos detected in this workspace.")];
+            return [accountsGroup, new InfoNode("No git repos detected in this workspace.")];
         }
-        const out: TreeNode[] = [];
+
+        const out: TreeNode[] = [accountsGroup];
         for (const repo of scan.repos) {
             out.push(await this.buildRepoNode(repo));
         }
@@ -173,6 +242,18 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
             out.push(new UnmatchedNode(unmatched));
         }
         return out;
+    }
+
+    private async verifyAccount(acc: Account): Promise<TokenStatus> {
+        const token = await this.tokens.get(acc.id);
+        if (!token) {
+            return { ok: false, error: "no token in SecretStorage" };
+        }
+        try {
+            return await getClient(acc.kind).verifyToken(acc, token);
+        } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
     }
 
     private async buildRepoNode(repo: WorkspaceRepo): Promise<RepoNode> {
@@ -183,16 +264,22 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
         const sections: SectionNode[] = [];
 
+        const prStatus = this.statusByAccount.get(repo.account.id);
         if (!prToken) {
             sections.push(new SectionNode(repo, "prs", [new ErrorNode(`No token for "${repo.account.label}". Re-add the account.`)], 0));
+        } else if (prStatus && !prStatus.ok) {
+            sections.push(new SectionNode(repo, "prs", [new ErrorNode(`Token for "${repo.account.label}" failed verification: ${prStatus.error}`)], 0));
         } else {
             const prClient = getClient(repo.account.kind);
             const prs = await this.safeFetch(() => prClient.listPullRequests(repo.account, prToken, repo.ref));
             sections.push(this.toSection(repo, "prs", prs));
         }
 
+        const issueStatus = this.statusByAccount.get(repo.issueAccount.id);
         if (!issueToken) {
             sections.push(new SectionNode(repo, "issues", [new ErrorNode(`No token for "${repo.issueAccount.label}". Re-add the account.`)], 0));
+        } else if (issueStatus && !issueStatus.ok) {
+            sections.push(new SectionNode(repo, "issues", [new ErrorNode(`Token for "${repo.issueAccount.label}" failed verification: ${issueStatus.error}`)], 0));
         } else {
             const issueClient = getClient(repo.issueAccount.kind);
             const issues = await this.safeFetch(() => issueClient.listIssues(repo.issueAccount, issueToken, repo.issueRef));

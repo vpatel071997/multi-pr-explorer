@@ -2,7 +2,7 @@
   "name": "multi-pr-explorer",
   "displayName": "Multi-PR Explorer",
   "description": "Workspace-scoped open PRs and assigned issues/work items across GitHub, GitLab, Bitbucket Cloud, and Azure DevOps. Per-repo issue-tracker override (e.g. GitLab code + Azure DevOps tickets).",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "vpatel071997",
   "license": "MIT",
   "engines": {
@@ -81,6 +81,12 @@
       {
         "command": "multiPrExplorer.manageIssueTrackers",
         "title": "Manage Issue Tracker Overrides…",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.testConnections",
+        "title": "Test Connections",
+        "icon": "$(beaker)",
         "category": "Multi-PR"
       }
     ],

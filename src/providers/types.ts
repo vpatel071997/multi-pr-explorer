@@ -35,6 +35,15 @@ export interface PullItem {
     draft?: boolean;
 }
 
+/** Result of a lightweight authenticated probe to the provider. */
+export interface TokenStatus {
+    ok: boolean;
+    /** Authenticated user/login on success. */
+    user?: string;
+    /** Brief error string on failure (HTTP status code, reason, etc.). */
+    error?: string;
+}
+
 export interface ProviderClient {
     /**
      * Try to parse this remote URL as belonging to this account's provider.
@@ -42,6 +51,8 @@ export interface ProviderClient {
      * missing required components like an Azure DevOps project segment).
      */
     parseRepoUrl(url: string, account: Account): RepoRef | null;
+    /** Hit a small authenticated endpoint to confirm the token works. */
+    verifyToken(account: Account, token: string): Promise<TokenStatus>;
     /** Fetch open PRs/MRs for the given repo. */
     listPullRequests(account: Account, token: string, repo: RepoRef): Promise<PullItem[]>;
     /** Fetch open issues/work items assigned to the authenticated user, scoped to this repo/project. */

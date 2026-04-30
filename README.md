@@ -185,11 +185,14 @@ the panel title bar. The token is deleted from `SecretStorage`.
 ## Tree layout
 
 ```
-[repo] owner/my-project                    ← one node per workspace repo
+Accounts (2 / 3)                           ← top-level auth status
+  ●  GitLab Work     gitlab • valerie       (green = token verified)
+  ●  Work ADO        azure • Valerie P.     (green dot)
+  ✕  Personal GH     github • HTTP 401      (red dot, tooltip has detail)
+[repo] owner/my-project
   Pull Requests (3)
     #14  Refactor auth                    Alice  •  2h ago
     #12  Bump deps                        Bob    •  1d ago
-    #11  …                                Carol  •  5d ago
   Issues / Tickets (1)
     #99  Memory leak in worker            you    •  3h ago
 [repo] another-team/some-service
@@ -199,6 +202,20 @@ the panel title bar. The token is deleted from `SecretStorage`.
     No assigned issues.
 [unmatched] disconnected-folder            ← tooltip shows the remote URL
 ```
+
+The **Accounts** section at the top probes each configured account against
+a tiny authenticated endpoint:
+- GitHub `GET /user`
+- GitLab `GET /api/v4/user`
+- Bitbucket `GET /2.0/user`
+- Azure DevOps `GET /{org}/_apis/connectionData`
+
+Repos whose PR or Issue account has a failing token will show clear errors
+in their respective sections instead of attempting the full PR/issue fetch
+(which would just produce noisier 401 errors).
+
+To re-test without doing a full refresh, run **Multi-PR: Test Connections**
+from the command palette. The dots update; PRs/issues are re-fetched too.
 
 - **Workspace folder names** vs. tree labels: the tree shows the
   provider-side display name (`owner/repo` for GitHub, `org/project/repo`
