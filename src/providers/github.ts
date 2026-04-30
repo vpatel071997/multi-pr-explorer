@@ -99,11 +99,10 @@ export class GitHubClient implements ProviderClient {
             return { ok: false, error: describeProbe(p, url) };
         }
         try {
-            const res = await fetch(url, { headers: this.headers(token) });
-            const data = (await res.json()) as { login: string };
-            return { ok: true, user: data.login };
-        } catch (e) {
-            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+            const data = JSON.parse(p.bodyText ?? "{}") as { login?: string };
+            return { ok: true, user: data.login ?? "?" };
+        } catch {
+            return { ok: false, error: `bad JSON from ${url}` };
         }
     }
 

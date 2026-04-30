@@ -106,10 +106,8 @@ export class AzureClient implements ProviderClient {
 
         const cd = await probe(collectionCd, headers);
         if (cd.ok) {
-            // connectionData returns user info; do a second fetch to read the body.
             try {
-                const r = await fetch(collectionCd, { headers });
-                const d = (await r.json()) as {
+                const d = JSON.parse(cd.bodyText ?? "{}") as {
                     authenticatedUser?: { providerDisplayName?: string; customDisplayName?: string };
                 };
                 const u = d.authenticatedUser;

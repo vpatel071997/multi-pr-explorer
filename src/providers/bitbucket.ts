@@ -95,15 +95,14 @@ export class BitbucketClient implements ProviderClient {
             return { ok: false, error: describeProbe(p, url) };
         }
         try {
-            const res = await fetch(url, { headers });
-            const data = (await res.json()) as { username?: string; display_name?: string; nickname?: string };
+            const data = JSON.parse(p.bodyText ?? "{}") as { username?: string; display_name?: string; nickname?: string };
             const display = data.username ?? data.nickname ?? data.display_name ?? "?";
             if (data.username) {
                 this.usernameByAccount.set(account.id, data.username);
             }
             return { ok: true, user: display };
-        } catch (e) {
-            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        } catch {
+            return { ok: false, error: `bad JSON from ${url}` };
         }
     }
 

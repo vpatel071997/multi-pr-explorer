@@ -65,15 +65,11 @@ export class GitLabClient implements ProviderClient {
         if (!p.ok) {
             return { ok: false, error: describeProbe(p, url) };
         }
-        // probe returned ok; re-fetch to get the body. (Could be optimized by
-        // having probe optionally return the body, but the duplicate call is
-        // fine for a 1-line /user response and keeps probe single-purpose.)
         try {
-            const res = await fetch(url, { headers: this.headers(token) });
-            const data = (await res.json()) as { username: string };
-            return { ok: true, user: data.username };
-        } catch (e) {
-            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+            const data = JSON.parse(p.bodyText ?? "{}") as { username?: string };
+            return { ok: true, user: data.username ?? "?" };
+        } catch {
+            return { ok: false, error: `bad JSON from ${url}` };
         }
     }
 
