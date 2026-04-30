@@ -1,4 +1,4 @@
-import { Account, ProviderClient, PullItem } from "./types";
+import { Account, ProviderClient, PullItem, RepoRef } from "./types";
 
 interface AdoPullRequest {
     pullRequestId: number;
@@ -35,55 +35,76 @@ interface WorkItemBatch {
     value: WorkItem[];
 }
 
-export class AzureClient implements ProviderClient {
-    async listOpen(account: Account, token: string): Promise<PullItem[]> {
-        const org = account.extra?.organization;
-        if (!org) {
-            throw new Error('Azure DevOps account is missing extra.organization. Re-add the account.');
-        }
-        const base = account.baseUrl.replace(/\/+$/, ""); // typically https://dev.azure.com
-        const url = `${base}/${encodeURIComponent(org)}/_apis/git/pullrequests?searchCriteria.status=active&api-version=7.1-preview.1&$top=100`;
-        const auth = "Basic " + Buffer.from(":" + token).toString("base64");
+function parseUrl(url: string): { host: string; org: string; project: string; repo: string } | null {
+    let s = url.replace(/\.git$/, "").replace(/\/+$/, "");
+    let m = s.match(/^https?:\/\/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/]+)/i);
+    if (m) return { host: "dev.azure.com", org: m[1], project: m[2], repo: m[3] };
+    m = s.match(/^[^@]+@ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+)/);
+    if (m) return { host: "dev.azure.com", org: m[1], project: m[2], repo: m[3] };
+    m = s.match(/^https?:\/\/([^.]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/]+)/i);
+    if (m) return { host: "dev.azure.com", org: m[1], project: m[2], repo: m[3] };
+    return null;
+}
 
+export class AzureClient implements ProviderClient {
+    parseRepoUrl(url: string, account: Account): RepoRef | null {
+        const parsed = parseUrl(url);
+        if (!parsed) return null;
+        // Match by configured organization to disambiguate when a user has
+        // multiple ADO accounts (different orgs).
+        const accOrg = account.extra?.organization?.toLowerCase();
+        if (accOrg && accOrg !== parsed.org.toLowerCase()) return null;
+        return {
+            url,
+            displayName: `${parsed.org}/${parsed.project}/${parsed.repo}`,
+            path: { org: parsed.org, project: parsed.project, repo: parsed.repo },
+        };
+    }
+
+    private auth(token: string): string {
+        return "Basic " + Buffer.from(":" + token).toString("base64");
+    }
+
+    async listPullRequests(account: Account, _token: string, repo: RepoRef): Promise<PullItem[]> {
+        const base = account.baseUrl.replace(/\/+$/, "");
+        const { org, project, repo: repoName } = repo.path;
+        const url = `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repoName)}/pullrequests?searchCriteria.status=active&api-version=7.1-preview.1&$top=100`;
         const res = await fetch(url, {
-            headers: { Authorization: auth, Accept: "application/json" },
+            headers: { Authorization: this.auth(_token), Accept: "application/json" },
         });
         if (!res.ok) {
-            throw new Error(`Azure DevOps ${res.status}: ${await res.text()}`);
+            throw new Error(`Azure DevOps PRs ${res.status}: ${await res.text()}`);
         }
         const data = (await res.json()) as AdoResponse;
         return data.value.map(pr => ({
             id: `#${pr.pullRequestId}`,
             title: pr.title,
             author: pr.createdBy?.displayName ?? pr.createdBy?.uniqueName ?? "?",
-            repo: `${pr.repository.project.name}/${pr.repository.name}`,
-            updated: pr.creationDate, // ADO active PR objects don't expose updated_at consistently
-            url: `${base}/${encodeURIComponent(org)}/${encodeURIComponent(pr.repository.project.name)}/_git/${encodeURIComponent(pr.repository.name)}/pullrequest/${pr.pullRequestId}`,
+            repo: repo.displayName,
+            updated: pr.creationDate,
+            url: `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repoName)}/pullrequest/${pr.pullRequestId}`,
         }));
     }
 
-    async listAssignedIssues(account: Account, token: string): Promise<PullItem[]> {
-        const org = account.extra?.organization;
-        if (!org) {
-            throw new Error('Azure DevOps account is missing extra.organization. Re-add the account.');
-        }
+    async listIssues(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
         const base = account.baseUrl.replace(/\/+$/, "");
-        const auth = "Basic " + Buffer.from(":" + token).toString("base64");
+        const { org, project } = repo.path;
         const headers: Record<string, string> = {
-            Authorization: auth,
+            Authorization: this.auth(token),
             Accept: "application/json",
             "Content-Type": "application/json",
         };
 
-        // Step 1: WIQL query → list of {id} pairs.
+        // WIQL: assigned-to-me work items in this project.
         const wiql = {
             query:
-                "SELECT [System.Id] FROM WorkItems " +
-                "WHERE [System.AssignedTo] = @Me " +
-                "AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') " +
-                "ORDER BY [System.ChangedDate] DESC",
+                `SELECT [System.Id] FROM WorkItems ` +
+                `WHERE [System.TeamProject] = '${project.replace(/'/g, "''")}' ` +
+                `AND [System.AssignedTo] = @Me ` +
+                `AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') ` +
+                `ORDER BY [System.ChangedDate] DESC`,
         };
-        const wiqlUrl = `${base}/${encodeURIComponent(org)}/_apis/wit/wiql?api-version=7.1-preview.2`;
+        const wiqlUrl = `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/wiql?api-version=7.1-preview.2`;
         const wiqlRes = await fetch(wiqlUrl, {
             method: "POST",
             headers,
@@ -97,8 +118,6 @@ export class AzureClient implements ProviderClient {
             return [];
         }
 
-        // Step 2: Batch-fetch the work items' fields. The /workitems endpoint
-        // accepts up to 200 ids per call; cap at 100 to keep response size sane.
         const ids = wiqlData.workItems.slice(0, 100).map(w => w.id).join(",");
         const fields = [
             "System.Title",
@@ -115,7 +134,7 @@ export class AzureClient implements ProviderClient {
         }
         const wiData = (await wiRes.json()) as WorkItemBatch;
         return wiData.value.map(w => {
-            const project = w.fields["System.TeamProject"];
+            const proj = w.fields["System.TeamProject"];
             const type = w.fields["System.WorkItemType"];
             return {
                 id: `${type} #${w.id}`,
@@ -123,9 +142,9 @@ export class AzureClient implements ProviderClient {
                 author: w.fields["System.AssignedTo"]?.displayName
                     ?? w.fields["System.AssignedTo"]?.uniqueName
                     ?? "?",
-                repo: project,
+                repo: repo.displayName,
                 updated: w.fields["System.ChangedDate"],
-                url: `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_workitems/edit/${w.id}`,
+                url: `${base}/${encodeURIComponent(org)}/${encodeURIComponent(proj)}/_workitems/edit/${w.id}`,
             };
         });
     }

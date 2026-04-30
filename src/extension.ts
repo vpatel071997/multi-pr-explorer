@@ -73,7 +73,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
             if (e.affectsConfiguration("multiPrExplorer.accounts")) {
                 tree.refresh();
             }
-        })
+        }),
+        vscode.workspace.onDidChangeWorkspaceFolders(() => tree.refresh())
     );
 }
 

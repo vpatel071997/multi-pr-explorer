@@ -1,4 +1,4 @@
-import { Account, ProviderClient, PullItem } from "./types";
+import { Account, ProviderClient, PullItem, RepoRef } from "./types";
 
 interface MergeRequest {
     iid: number;
@@ -6,7 +6,6 @@ interface MergeRequest {
     author: { username: string };
     updated_at: string;
     web_url: string;
-    references: { full: string }; // "group/project!123"
 }
 
 interface Issue {
@@ -16,63 +15,80 @@ interface Issue {
     assignees?: { username: string }[];
     updated_at: string;
     web_url: string;
-    references: { full: string }; // "group/project#123"
+}
+
+function hostOf(baseUrl: string): string {
+    return baseUrl.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").toLowerCase();
+}
+
+function parseUrl(url: string): { host: string; path: string; repo: string } | null {
+    let s = url.replace(/\.git$/, "").replace(/\/+$/, "");
+    let host: string, body: string;
+    let m = s.match(/^https?:\/\/([^/]+)\/(.+)$/i);
+    if (m) {
+        host = m[1].toLowerCase();
+        body = m[2];
+    } else {
+        m = s.match(/^[^@]+@([^:]+):(.+)$/);
+        if (!m) return null;
+        host = m[1].toLowerCase();
+        body = m[2];
+    }
+    const parts = body.split("/").filter(p => p.length > 0);
+    if (parts.length < 2) return null;
+    return { host, path: parts.join("/"), repo: parts[parts.length - 1] };
 }
 
 export class GitLabClient implements ProviderClient {
-    async listOpen(account: Account, token: string): Promise<PullItem[]> {
-        const base = account.baseUrl.replace(/\/+$/, "");
-        // Authored MRs first, then assigned-to-me / reviewer queries via separate scopes.
-        // scope=created_by_me / assigned_to_me are cheaper and well-supported on self-hosted.
-        const scopes = ["created_by_me", "assigned_to_me"];
-        const seen = new Set<string>();
-        const out: PullItem[] = [];
-        for (const scope of scopes) {
-            const url = `${base}/api/v4/merge_requests?scope=${scope}&state=opened&per_page=50`;
-            const res = await fetch(url, {
-                headers: {
-                    "PRIVATE-TOKEN": token,
-                },
-            });
-            if (!res.ok) {
-                throw new Error(`GitLab ${res.status}: ${await res.text()}`);
-            }
-            const data = (await res.json()) as MergeRequest[];
-            for (const mr of data) {
-                if (seen.has(mr.web_url)) {
-                    continue;
-                }
-                seen.add(mr.web_url);
-                // references.full is "group/project!iid" — strip the "!iid" suffix.
-                const repo = mr.references.full.replace(/![0-9]+$/, "");
-                out.push({
-                    id: `!${mr.iid}`,
-                    title: mr.title,
-                    author: mr.author.username,
-                    repo,
-                    updated: mr.updated_at,
-                    url: mr.web_url,
-                });
-            }
-        }
-        return out;
+    parseRepoUrl(url: string, account: Account): RepoRef | null {
+        const accHost = hostOf(account.baseUrl);
+        const parsed = parseUrl(url);
+        if (!parsed) return null;
+        if (parsed.host !== accHost) return null;
+        return {
+            url,
+            displayName: parsed.path,
+            path: { fullPath: parsed.path, repo: parsed.repo },
+        };
     }
 
-    async listAssignedIssues(account: Account, token: string): Promise<PullItem[]> {
+    private headers(token: string): Record<string, string> {
+        return { "PRIVATE-TOKEN": token };
+    }
+
+    async listPullRequests(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
         const base = account.baseUrl.replace(/\/+$/, "");
-        const url = `${base}/api/v4/issues?scope=assigned_to_me&state=opened&per_page=100`;
-        const res = await fetch(url, {
-            headers: { "PRIVATE-TOKEN": token },
-        });
+        const id = encodeURIComponent(repo.path.fullPath);
+        const url = `${base}/api/v4/projects/${id}/merge_requests?state=opened&per_page=100`;
+        const res = await fetch(url, { headers: this.headers(token) });
         if (!res.ok) {
-            throw new Error(`GitLab ${res.status}: ${await res.text()}`);
+            throw new Error(`GitLab MRs ${res.status}: ${await res.text()}`);
+        }
+        const data = (await res.json()) as MergeRequest[];
+        return data.map(mr => ({
+            id: `!${mr.iid}`,
+            title: mr.title,
+            author: mr.author.username,
+            repo: repo.displayName,
+            updated: mr.updated_at,
+            url: mr.web_url,
+        }));
+    }
+
+    async listIssues(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
+        const base = account.baseUrl.replace(/\/+$/, "");
+        const id = encodeURIComponent(repo.path.fullPath);
+        const url = `${base}/api/v4/projects/${id}/issues?state=opened&scope=assigned_to_me&per_page=100`;
+        const res = await fetch(url, { headers: this.headers(token) });
+        if (!res.ok) {
+            throw new Error(`GitLab issues ${res.status}: ${await res.text()}`);
         }
         const data = (await res.json()) as Issue[];
         return data.map(i => ({
             id: `#${i.iid}`,
             title: i.title,
             author: i.assignees?.[0]?.username ?? i.author.username,
-            repo: i.references.full.replace(/#[0-9]+$/, ""),
+            repo: repo.displayName,
             updated: i.updated_at,
             url: i.web_url,
         }));

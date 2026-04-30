@@ -9,14 +9,23 @@ export interface Account {
     extra?: Record<string, string>;
 }
 
+/** A repository identified by its remote URL, parsed by a specific provider. */
+export interface RepoRef {
+    /** The original git remote URL — used to dedupe and to display. */
+    url: string;
+    /** Friendly name for the tree: "owner/repo" or "org/project/repo". */
+    displayName: string;
+    /** Provider-specific path bag (owner/repo, group/.../project, org/project/repo, etc.). */
+    path: Record<string, string>;
+}
+
 /** Shared shape used for both pull/merge requests and issues/work items. */
 export interface PullItem {
-    /** "#1234" or "PR-456" — what's shown in the tree. */
     id: string;
     title: string;
     /** Author for PRs/MRs; primary assignee for issues/work items. */
     author: string;
-    /** Human-readable repo identifier — "owner/repo" for GH, full path for GL/BB, "project/repo" for ADO. */
+    /** Repo display name; matches RepoRef.displayName. */
     repo: string;
     /** ISO timestamp of last update. */
     updated: string;
@@ -25,8 +34,14 @@ export interface PullItem {
 }
 
 export interface ProviderClient {
-    /** Fetch open PRs/MRs the user is involved with. */
-    listOpen(account: Account, token: string): Promise<PullItem[]>;
-    /** Fetch open issues / tickets / work items assigned to the authenticated user. */
-    listAssignedIssues(account: Account, token: string): Promise<PullItem[]>;
+    /**
+     * Try to parse this remote URL as belonging to this account's provider.
+     * Returns null if the URL clearly doesn't fit (different host, malformed,
+     * missing required components like an Azure DevOps project segment).
+     */
+    parseRepoUrl(url: string, account: Account): RepoRef | null;
+    /** Fetch open PRs/MRs for the given repo. */
+    listPullRequests(account: Account, token: string, repo: RepoRef): Promise<PullItem[]>;
+    /** Fetch open issues/work items assigned to the authenticated user, scoped to this repo/project. */
+    listIssues(account: Account, token: string, repo: RepoRef): Promise<PullItem[]>;
 }

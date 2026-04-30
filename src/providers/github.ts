@@ -1,28 +1,21 @@
-import { Account, ProviderClient, PullItem } from "./types";
+import { Account, ProviderClient, PullItem, RepoRef } from "./types";
 
-interface SearchIssue {
+interface PullRequestItem {
     number: number;
     title: string;
     user: { login: string };
     updated_at: string;
     html_url: string;
-    repository_url: string; // "https://api.github.com/repos/owner/repo"
 }
 
-interface SearchResponse {
-    items: SearchIssue[];
-}
-
-/** Shape returned by GitHub /issues — superset of search items, plus pull_request key on PRs. */
-interface IssueListEntry {
+interface IssueItem {
     number: number;
     title: string;
     user: { login: string };
     assignees?: { login: string }[];
     updated_at: string;
     html_url: string;
-    repository_url: string;
-    pull_request?: unknown; // present iff this entry is actually a PR
+    pull_request?: unknown;
 }
 
 function apiBase(baseUrl: string): string {
@@ -31,82 +24,92 @@ function apiBase(baseUrl: string): string {
     if (host === "github.com") {
         return "https://api.github.com";
     }
-    // GitHub Enterprise: <base>/api/v3
     return `${trimmed}/api/v3`;
 }
 
-function repoFromUrl(repoUrl: string): string {
-    // ".../repos/owner/repo" -> "owner/repo"
-    const m = repoUrl.match(/\/repos\/([^/]+\/[^/]+)$/);
-    return m ? m[1] : repoUrl;
+function hostOf(baseUrl: string): string {
+    return baseUrl.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").toLowerCase();
+}
+
+function parseUrl(url: string): { host: string; owner: string; repo: string } | null {
+    let s = url.replace(/\.git$/, "").replace(/\/+$/, "");
+    let host: string, path: string;
+    let m = s.match(/^https?:\/\/([^/]+)\/(.+)$/i);
+    if (m) {
+        host = m[1].toLowerCase();
+        path = m[2];
+    } else {
+        m = s.match(/^[^@]+@([^:]+):(.+)$/);
+        if (!m) return null;
+        host = m[1].toLowerCase();
+        path = m[2];
+    }
+    const parts = path.split("/").filter(p => p.length > 0);
+    if (parts.length < 2) return null;
+    // GitHub repos are always exactly owner/repo — anything deeper isn't ours.
+    if (parts.length !== 2) return null;
+    return { host, owner: parts[0], repo: parts[1] };
 }
 
 export class GitHubClient implements ProviderClient {
-    async listOpen(account: Account, token: string): Promise<PullItem[]> {
-        const api = apiBase(account.baseUrl);
-        // PRs the authenticated user authored or is requested to review.
-        // Two queries because GitHub search has no native "OR involve" with both filters reliably.
-        const queries = [
-            "is:pr+is:open+author:@me",
-            "is:pr+is:open+review-requested:@me",
-        ];
-        const seen = new Set<string>();
-        const out: PullItem[] = [];
-        for (const q of queries) {
-            const url = `${api}/search/issues?q=${q}&per_page=50`;
-            const res = await fetch(url, {
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    Accept: "application/vnd.github+json",
-                    "User-Agent": "multi-pr-explorer",
-                },
-            });
-            if (!res.ok) {
-                throw new Error(`GitHub ${res.status}: ${await res.text()}`);
-            }
-            const data = (await res.json()) as SearchResponse;
-            for (const item of data.items) {
-                if (seen.has(item.html_url)) {
-                    continue;
-                }
-                seen.add(item.html_url);
-                out.push({
-                    id: `#${item.number}`,
-                    title: item.title,
-                    author: item.user.login,
-                    repo: repoFromUrl(item.repository_url),
-                    updated: item.updated_at,
-                    url: item.html_url,
-                });
-            }
-        }
-        return out;
+    parseRepoUrl(url: string, account: Account): RepoRef | null {
+        const accHost = hostOf(account.baseUrl);
+        const parsed = parseUrl(url);
+        if (!parsed) return null;
+        if (parsed.host !== accHost) return null;
+        return {
+            url,
+            displayName: `${parsed.owner}/${parsed.repo}`,
+            path: { owner: parsed.owner, repo: parsed.repo },
+        };
     }
 
-    async listAssignedIssues(account: Account, token: string): Promise<PullItem[]> {
-        // GitHub /issues endpoint returns issues assigned to the authenticated
-        // user across all repos they can see. PRs share this endpoint and are
-        // distinguished by a `pull_request` key — filter them out.
+    private headers(token: string): Record<string, string> {
+        return {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "User-Agent": "multi-pr-explorer",
+        };
+    }
+
+    async listPullRequests(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
         const api = apiBase(account.baseUrl);
-        const url = `${api}/issues?filter=assigned&state=open&per_page=100`;
-        const res = await fetch(url, {
-            headers: {
-                Authorization: `Bearer ${token}`,
-                Accept: "application/vnd.github+json",
-                "User-Agent": "multi-pr-explorer",
-            },
-        });
+        const url = `${api}/repos/${repo.path.owner}/${repo.path.repo}/pulls?state=open&per_page=100`;
+        const res = await fetch(url, { headers: this.headers(token) });
         if (!res.ok) {
-            throw new Error(`GitHub ${res.status}: ${await res.text()}`);
+            throw new Error(`GitHub PRs ${res.status}: ${await res.text()}`);
         }
-        const data = (await res.json()) as IssueListEntry[];
+        const data = (await res.json()) as PullRequestItem[];
+        return data.map(pr => ({
+            id: `#${pr.number}`,
+            title: pr.title,
+            author: pr.user.login,
+            repo: repo.displayName,
+            updated: pr.updated_at,
+            url: pr.html_url,
+        }));
+    }
+
+    async listIssues(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
+        const api = apiBase(account.baseUrl);
+        // /issues returns both issues and PRs; filter to issues only via pull_request key.
+        // assignee=* picks issues with at least one assignee; without it we'd only get
+        // issues with author scope. Use 'assignee=@me' equivalent via assignee=<authenticated user>.
+        // GitHub doesn't support @me in this endpoint, but assignee=* + filter client-side is fine
+        // for a single repo. We'll bias toward "any assigned issue in this repo".
+        const url = `${api}/repos/${repo.path.owner}/${repo.path.repo}/issues?state=open&assignee=*&per_page=100`;
+        const res = await fetch(url, { headers: this.headers(token) });
+        if (!res.ok) {
+            throw new Error(`GitHub issues ${res.status}: ${await res.text()}`);
+        }
+        const data = (await res.json()) as IssueItem[];
         return data
             .filter(e => !e.pull_request)
             .map(e => ({
                 id: `#${e.number}`,
                 title: e.title,
                 author: e.assignees?.[0]?.login ?? e.user.login,
-                repo: repoFromUrl(e.repository_url),
+                repo: repo.displayName,
                 updated: e.updated_at,
                 url: e.html_url,
             }));

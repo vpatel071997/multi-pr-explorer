@@ -1,9 +1,4 @@
-import { Account, ProviderClient, PullItem } from "./types";
-
-interface BbRepo {
-    slug: string;
-    full_name: string;
-}
+import { Account, ProviderClient, PullItem, RepoRef } from "./types";
 
 interface BbPullRequest {
     id: number;
@@ -13,60 +8,101 @@ interface BbPullRequest {
     links: { html: { href: string } };
 }
 
-interface BbPaged<T> {
-    values: T[];
-    next?: string;
+interface BbIssue {
+    id: number;
+    title: string;
+    assignee?: { display_name?: string; nickname?: string };
+    reporter?: { display_name?: string; nickname?: string };
+    updated_on: string;
+    links: { html: { href: string } };
 }
 
-const REPO_LIMIT = 50; // cap to avoid runaway when a workspace has hundreds of repos
+interface BbPaged<T> {
+    values: T[];
+}
+
+function parseUrl(url: string): { host: string; workspace: string; repo: string } | null {
+    let s = url.replace(/\.git$/, "").replace(/\/+$/, "");
+    let host: string, body: string;
+    let m = s.match(/^https?:\/\/([^/]+)\/(.+)$/i);
+    if (m) {
+        host = m[1].toLowerCase();
+        body = m[2];
+    } else {
+        m = s.match(/^[^@]+@([^:]+):(.+)$/);
+        if (!m) return null;
+        host = m[1].toLowerCase();
+        body = m[2];
+    }
+    const parts = body.split("/").filter(p => p.length > 0);
+    if (parts.length !== 2) return null;
+    return { host, workspace: parts[0], repo: parts[1] };
+}
 
 export class BitbucketClient implements ProviderClient {
-    async listOpen(account: Account, token: string): Promise<PullItem[]> {
-        const workspace = account.extra?.workspace;
-        if (!workspace) {
-            throw new Error('Bitbucket account is missing extra.workspace. Re-add the account.');
-        }
-        // Bitbucket Cloud always API at api.bitbucket.org regardless of what user typed for base.
-        const base = "https://api.bitbucket.org/2.0";
-        const auth = "Basic " + Buffer.from(token).toString("base64");
-        const headers: Record<string, string> = { Authorization: auth, Accept: "application/json" };
-
-        // List repos in workspace where the user is a member.
-        const reposUrl = `${base}/repositories/${encodeURIComponent(workspace)}?role=member&pagelen=100&fields=values.slug,values.full_name`;
-        const repoRes = await fetch(reposUrl, { headers });
-        if (!repoRes.ok) {
-            throw new Error(`Bitbucket repos ${repoRes.status}: ${await repoRes.text()}`);
-        }
-        const repoData = (await repoRes.json()) as BbPaged<BbRepo>;
-        const out: PullItem[] = [];
-
-        for (const r of repoData.values.slice(0, REPO_LIMIT)) {
-            const prUrl = `${base}/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(r.slug)}/pullrequests?state=OPEN&pagelen=50`;
-            const prRes = await fetch(prUrl, { headers });
-            if (!prRes.ok) {
-                // Skip repos we can't access — typical for archived / restricted repos.
-                continue;
-            }
-            const prData = (await prRes.json()) as BbPaged<BbPullRequest>;
-            for (const pr of prData.values) {
-                out.push({
-                    id: `#${pr.id}`,
-                    title: pr.title,
-                    author: pr.author?.display_name ?? pr.author?.nickname ?? "?",
-                    repo: r.full_name,
-                    updated: pr.updated_on,
-                    url: pr.links.html.href,
-                });
-            }
-        }
-        return out;
+    parseRepoUrl(url: string, _account: Account): RepoRef | null {
+        // Bitbucket Cloud is always bitbucket.org regardless of what the user
+        // configured for baseUrl (api.bitbucket.org is the API host).
+        const parsed = parseUrl(url);
+        if (!parsed) return null;
+        if (parsed.host !== "bitbucket.org") return null;
+        return {
+            url,
+            displayName: `${parsed.workspace}/${parsed.repo}`,
+            path: { workspace: parsed.workspace, repo: parsed.repo },
+        };
     }
 
-    async listAssignedIssues(_account: Account, _token: string): Promise<PullItem[]> {
-        // Bitbucket Cloud issues are per-repo and most workspaces don't enable
-        // them. Cross-workspace "assigned to me" requires enumerating every
-        // repo's issue tracker, which is expensive and rarely useful. v0.1
-        // returns empty rather than fanning out hundreds of API calls.
-        return [];
+    private auth(token: string): string {
+        return "Basic " + Buffer.from(token).toString("base64");
+    }
+
+    async listPullRequests(_account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
+        const base = "https://api.bitbucket.org/2.0";
+        const url = `${base}/repositories/${encodeURIComponent(repo.path.workspace)}/${encodeURIComponent(repo.path.repo)}/pullrequests?state=OPEN&pagelen=50`;
+        const res = await fetch(url, {
+            headers: { Authorization: this.auth(token), Accept: "application/json" },
+        });
+        if (!res.ok) {
+            throw new Error(`Bitbucket PRs ${res.status}: ${await res.text()}`);
+        }
+        const data = (await res.json()) as BbPaged<BbPullRequest>;
+        return data.values.map(pr => ({
+            id: `#${pr.id}`,
+            title: pr.title,
+            author: pr.author?.display_name ?? pr.author?.nickname ?? "?",
+            repo: repo.displayName,
+            updated: pr.updated_on,
+            url: pr.links.html.href,
+        }));
+    }
+
+    async listIssues(_account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
+        const base = "https://api.bitbucket.org/2.0";
+        // Bitbucket Cloud per-repo issues; many repos have issue tracking disabled,
+        // returning 404 in that case. Treat 404 as "no issues for this repo".
+        const url = `${base}/repositories/${encodeURIComponent(repo.path.workspace)}/${encodeURIComponent(repo.path.repo)}/issues?status=new&status=open&pagelen=50`;
+        const res = await fetch(url, {
+            headers: { Authorization: this.auth(token), Accept: "application/json" },
+        });
+        if (res.status === 404) {
+            return [];
+        }
+        if (!res.ok) {
+            throw new Error(`Bitbucket issues ${res.status}: ${await res.text()}`);
+        }
+        const data = (await res.json()) as BbPaged<BbIssue>;
+        return data.values.map(i => ({
+            id: `#${i.id}`,
+            title: i.title,
+            author: i.assignee?.display_name
+                ?? i.assignee?.nickname
+                ?? i.reporter?.display_name
+                ?? i.reporter?.nickname
+                ?? "?",
+            repo: repo.displayName,
+            updated: i.updated_on,
+            url: i.links.html.href,
+        }));
     }
 }
