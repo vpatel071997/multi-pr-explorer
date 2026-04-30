@@ -36,20 +36,42 @@ interface WorkItemBatch {
     value: WorkItem[];
 }
 
-function parseUrl(url: string): { host: string; org: string; project: string; repo: string } | null {
-    let s = url.replace(/\.git$/, "").replace(/\/+$/, "");
+function parseUrl(url: string, account?: Account): { host: string; org: string; project: string; repo: string } | null {
+    const s = url.replace(/\.git$/, "").replace(/\/+$/, "");
+
+    // Cloud patterns (in order: HTTPS dev.azure.com, SSH dev.azure.com, legacy *.visualstudio.com).
     let m = s.match(/^https?:\/\/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/]+)/i);
     if (m) return { host: "dev.azure.com", org: m[1], project: m[2], repo: m[3] };
     m = s.match(/^[^@]+@ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+)/);
     if (m) return { host: "dev.azure.com", org: m[1], project: m[2], repo: m[3] };
     m = s.match(/^https?:\/\/([^.]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/]+)/i);
     if (m) return { host: "dev.azure.com", org: m[1], project: m[2], repo: m[3] };
+
+    // Azure DevOps Server / TFS: any URL whose prefix matches the configured
+    // account.baseUrl, followed by `{collection}/{project}/_git/{repo}`.
+    // Example: baseUrl = https://gide-afs.web.apple.com/tfs, repo URL =
+    //   https://gide-afs.web.apple.com/tfs/BRT/APPL_ONE/_git/some-repo
+    // → collection = BRT, project = APPL_ONE, repo = some-repo.
+    if (account) {
+        const accBase = account.baseUrl.replace(/\/+$/, "");
+        const sLower = s.toLowerCase();
+        const accLower = accBase.toLowerCase();
+        if (sLower.startsWith(accLower + "/")) {
+            const remainder = s.substring(accBase.length).replace(/^\/+/, "");
+            const tfs = remainder.match(/^([^/]+)\/([^/]+)\/_git\/([^/]+)/);
+            if (tfs) {
+                const host = accBase.replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+                return { host, org: tfs[1], project: tfs[2], repo: tfs[3] };
+            }
+        }
+    }
+
     return null;
 }
 
 export class AzureClient implements ProviderClient {
     parseRepoUrl(url: string, account: Account): RepoRef | null {
-        const parsed = parseUrl(url);
+        const parsed = parseUrl(url, account);
         if (!parsed) return null;
         // Match by configured organization to disambiguate when a user has
         // multiple ADO accounts (different orgs).

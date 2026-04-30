@@ -44,8 +44,9 @@ const PROVIDERS: ProviderChoice[] = [
         tokenPrompt: "Bitbucket credentials as 'username:apppassword' (or 'email:apitoken')",
     },
     {
-        label: "Azure DevOps (cloud)",
+        label: "Azure DevOps (cloud or on-prem TFS / DevOps Server)",
         kind: "azure",
+        // Cloud default; TFS/Server users overwrite with e.g. https://tfs.acme.com/tfs.
         defaultBaseUrl: "https://dev.azure.com",
         needsExtra: "organization",
         tokenPrompt: "Azure DevOps Personal Access Token (Code: Read + Work Items: Read)",
@@ -203,8 +204,8 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
         extra.workspace = ws;
     } else if (p.needsExtra === "organization") {
         const org = await vscode.window.showInputBox({
-            prompt: "Azure DevOps organization slug",
-            placeHolder: "e.g. acme",
+            prompt: "Azure DevOps organization (cloud) or collection (TFS / on-prem)",
+            placeHolder: "e.g. acme  •  for TFS this is your collection name, e.g. BRT",
             ignoreFocusOut: true,
         });
         if (!org) { return; }

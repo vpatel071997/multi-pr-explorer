@@ -76,7 +76,7 @@ you put in the **Base URL** field, so the default is fine.
 When prompted for a **workspace**, enter the slug from your Bitbucket URL
 (`bitbucket.org/{workspace}/{repo}`).
 
-### Azure DevOps
+### Azure DevOps (cloud)
 
 1. Visit **<https://dev.azure.com/YOUR-ORG/_usersSettings/tokens>** (replace
    `YOUR-ORG` with your organization slug).
@@ -87,6 +87,42 @@ When prompted for a **workspace**, enter the slug from your Bitbucket URL
 5. **Base URL**: `https://dev.azure.com`.
 6. **Organization**: the slug from your Azure DevOps URL
    (`dev.azure.com/{organization}`).
+
+### Azure DevOps Server / on-prem TFS
+
+For on-prem deployments, the URL pattern is
+`https://{host}/[tfs-prefix]/{collection}/{project}/...`. Map it to the
+extension's account fields like this:
+
+| Account field          | What to put                                                |
+|---|---|
+| **Base URL**           | the host *plus* any path prefix, **without** the collection — e.g. `https://gide-afs.web.apple.com/tfs` |
+| **Organization**       | the collection name — e.g. `BRT`                            |
+| **Token**              | TFS Personal Access Token; same scopes as cloud (Code: Read + Work Items: Read) |
+| **Token URL**          | typically `https://{host}/[tfs-prefix]/_usersSettings/tokens` |
+
+Worked example using the URL `https://gide-afs.web.apple.com/tfs/BRT/APPL_ONE/_workitems/edit/35695`:
+
+- **Base URL** → `https://gide-afs.web.apple.com/tfs`
+- **Organization** → `BRT`
+- ADO project to query (used in the issue-tracker map or auto-detected
+  from a TFS git remote like
+  `https://gide-afs.web.apple.com/tfs/BRT/APPL_ONE/_git/some-repo`)
+  → `APPL_ONE`
+
+The extension will then call:
+```
+POST  https://gide-afs.web.apple.com/tfs/BRT/APPL_ONE/_apis/wit/wiql?api-version=7.1-preview.2
+GET   https://gide-afs.web.apple.com/tfs/BRT/APPL_ONE/_apis/wit/workitems?ids=…&api-version=7.1
+GET   https://gide-afs.web.apple.com/tfs/BRT/_apis/connectionData?api-version=7.1   ← auth probe
+```
+
+If the user has a TFS git remote in their workspace, the parser will pick
+it up automatically (since v0.7.3) by stripping the account's Base URL
+prefix and reading `{collection}/{project}/_git/{repo}` from the
+remainder. If the only thing on TFS is the boards (code lives elsewhere),
+use the **Map Issue Tracker…** wizard on a non-TFS repo node to redirect
+the *Issues / Tickets* section to the TFS account + project.
 
 ---
 
@@ -309,10 +345,12 @@ extension loaded — useful for iterating without packaging.
 
 ---
 
-## Limitations (v0.5)
+## Limitations (v0.7)
 
-- Bitbucket **Server** (self-hosted Stash) and Azure DevOps **Server** are
-  not supported — different APIs, different auth.
+- Bitbucket **Server** (self-hosted Stash) is not supported — its REST API
+  (`/rest/api/1.0/…`) differs from Bitbucket Cloud's. Azure DevOps
+  **Server / TFS** *is* supported (see above) since it speaks the same
+  REST API as the cloud, just under a different URL prefix.
 - No in-editor diff/review. Click row → opens in browser.
 - No filters / no auto-poll / no notifications.
 - Workspace folder must have an `origin` remote pointing at a host that
