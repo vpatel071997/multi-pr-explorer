@@ -57,6 +57,9 @@ function parseUrl(url: string): { host: string; workspace: string; repo: string 
 }
 
 export class BitbucketClient implements ProviderClient {
+    /** authenticated username per accountId; populated by verifyToken. */
+    private usernameByAccount = new Map<string, string>();
+
     parseRepoUrl(url: string, account: Account): RepoRef | null {
         const parsed = parseUrl(url);
         if (!parsed) return null;
@@ -93,10 +96,27 @@ export class BitbucketClient implements ProviderClient {
                 return { ok: false, error: `HTTP ${res.status}` };
             }
             const data = (await res.json()) as { username?: string; display_name?: string; nickname?: string };
-            return { ok: true, user: data.username ?? data.nickname ?? data.display_name ?? "?" };
+            const display = data.username ?? data.nickname ?? data.display_name ?? "?";
+            // Cache the username so listIssues can build the assignee filter.
+            // Some Bitbucket token types (notably workspace-scoped API tokens)
+            // omit `username` from /user; in that case the cache stays empty
+            // and listIssues falls back to skipping the assignee filter.
+            if (data.username) {
+                this.usernameByAccount.set(account.id, data.username);
+            }
+            return { ok: true, user: display };
         } catch (e) {
             return { ok: false, error: e instanceof Error ? e.message : String(e) };
         }
+    }
+
+    private async getCachedUsername(account: Account, token: string): Promise<string | null> {
+        const cached = this.usernameByAccount.get(account.id);
+        if (cached) { return cached; }
+        // Fall back to an inline /user fetch (e.g. when listIssues runs before
+        // verifyToken in some test path).
+        await this.verifyToken(account, token);
+        return this.usernameByAccount.get(account.id) ?? null;
     }
 
     async listPullRequests(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
@@ -121,9 +141,17 @@ export class BitbucketClient implements ProviderClient {
 
     async listIssues(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
         const base = bbApiRoot(account.baseUrl);
-        // Bitbucket Cloud per-repo issues; many repos have issue tracking disabled,
-        // returning 404 in that case. Treat 404 as "no issues for this repo".
-        const url = `${base}/repositories/${encodeURIComponent(repo.path.workspace)}/${encodeURIComponent(repo.path.repo)}/issues?status=new&status=open&pagelen=50`;
+        // Bitbucket per-repo issue tracker is opt-in; disabled trackers 404.
+        // Filter via BBQL `q=` — the issue's state field uses values like
+        // "new", "open", "on hold", etc. State and assignee filters AND'd
+        // together. If we don't have the username cached we drop the
+        // assignee predicate (returns all open issues in the repo).
+        const username = await this.getCachedUsername(account, token);
+        const stateClause = '(state="new" OR state="open" OR state="on hold")';
+        const q = username
+            ? `${stateClause} AND assignee.username="${username}"`
+            : stateClause;
+        const url = `${base}/repositories/${encodeURIComponent(repo.path.workspace)}/${encodeURIComponent(repo.path.repo)}/issues?q=${encodeURIComponent(q)}&pagelen=50`;
         const res = await fetch(url, {
             headers: { Authorization: this.auth(token), Accept: "application/json" },
         });

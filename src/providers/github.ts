@@ -9,14 +9,18 @@ interface PullRequestItem {
     draft?: boolean;
 }
 
-interface IssueItem {
+interface SearchIssueItem {
     number: number;
     title: string;
     user: { login: string };
     assignees?: { login: string }[];
     updated_at: string;
     html_url: string;
-    pull_request?: unknown;
+}
+
+interface SearchResponse {
+    total_count: number;
+    items: SearchIssueItem[];
 }
 
 /**
@@ -122,26 +126,24 @@ export class GitHubClient implements ProviderClient {
 
     async listIssues(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
         const api = apiBase(account.baseUrl);
-        // /issues returns both issues and PRs; filter to issues only via pull_request key.
-        // assignee=* picks issues with at least one assignee; without it we'd only get
-        // issues with author scope. Use 'assignee=@me' equivalent via assignee=<authenticated user>.
-        // GitHub doesn't support @me in this endpoint, but assignee=* + filter client-side is fine
-        // for a single repo. We'll bias toward "any assigned issue in this repo".
-        const url = `${api}/repos/${repo.path.owner}/${repo.path.repo}/issues?state=open&assignee=*&per_page=100`;
+        // /search/issues with `assignee:@me` resolves the authenticated user
+        // server-side and excludes PRs via `is:issue` (GitHub treats PRs as
+        // a kind of issue under /repos/.../issues, so we'd otherwise have
+        // to filter the pull_request marker client-side).
+        const q = `is:issue is:open assignee:@me repo:${repo.path.owner}/${repo.path.repo}`;
+        const url = `${api}/search/issues?q=${encodeURIComponent(q)}&per_page=100`;
         const res = await fetch(url, { headers: this.headers(token) });
         if (!res.ok) {
             throw new Error(`GitHub issues ${res.status}: ${await res.text()}`);
         }
-        const data = (await res.json()) as IssueItem[];
-        return data
-            .filter(e => !e.pull_request)
-            .map(e => ({
-                id: `#${e.number}`,
-                title: e.title,
-                author: e.assignees?.[0]?.login ?? e.user.login,
-                repo: repo.displayName,
-                updated: e.updated_at,
-                url: e.html_url,
-            }));
+        const data = (await res.json()) as SearchResponse;
+        return data.items.map(it => ({
+            id: `#${it.number}`,
+            title: it.title,
+            author: it.assignees?.[0]?.login ?? it.user.login,
+            repo: repo.displayName,
+            updated: it.updated_at,
+            url: it.html_url,
+        }));
     }
 }
