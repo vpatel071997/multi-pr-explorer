@@ -1,10 +1,17 @@
-import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
+import { Account, ProviderClient, PullItem, RepoRef, RepoWebUrls, TokenStatus } from "./types";
 import { probe, describeProbe } from "./http";
+
+interface AdoIdentity {
+    id?: string;
+    displayName?: string;
+    uniqueName?: string;
+}
 
 interface AdoPullRequest {
     pullRequestId: number;
     title: string;
-    createdBy?: { displayName?: string; uniqueName?: string };
+    createdBy?: AdoIdentity;
+    reviewers?: AdoIdentity[];
     creationDate: string;
     isDraft?: boolean;
     repository: {
@@ -71,6 +78,9 @@ function parseUrl(url: string, account?: Account): { host: string; org: string; 
 }
 
 export class AzureClient implements ProviderClient {
+    /** authenticated user GUID per accountId; populated by verifyToken. */
+    private userIdByAccount = new Map<string, string>();
+
     parseRepoUrl(url: string, account: Account): RepoRef | null {
         const parsed = parseUrl(url, account);
         if (!parsed) return null;
@@ -108,9 +118,12 @@ export class AzureClient implements ProviderClient {
         if (cd.ok) {
             try {
                 const d = JSON.parse(cd.bodyText ?? "{}") as {
-                    authenticatedUser?: { providerDisplayName?: string; customDisplayName?: string };
+                    authenticatedUser?: { id?: string; providerDisplayName?: string; customDisplayName?: string };
                 };
                 const u = d.authenticatedUser;
+                if (u?.id) {
+                    this.userIdByAccount.set(account.id, u.id);
+                }
                 return { ok: true, user: u?.providerDisplayName ?? u?.customDisplayName ?? org };
             } catch {
                 return { ok: true, user: org };
@@ -150,7 +163,13 @@ export class AzureClient implements ProviderClient {
             throw new Error(`Azure DevOps PRs ${res.status}: ${await res.text()}`);
         }
         const data = (await res.json()) as AdoResponse;
-        return data.value.map(pr => ({
+        const myId = this.userIdByAccount.get(account.id);
+        const filtered = myId
+            ? data.value.filter(pr =>
+                pr.createdBy?.id === myId ||
+                pr.reviewers?.some(r => r.id === myId))
+            : data.value;
+        return filtered.map(pr => ({
             id: `#${pr.pullRequestId}`,
             title: pr.title,
             author: pr.createdBy?.displayName ?? pr.createdBy?.uniqueName ?? "?",
@@ -229,5 +248,27 @@ export class AzureClient implements ProviderClient {
                 url: `${base}/${encodeURIComponent(org)}/${encodeURIComponent(proj)}/_workitems/edit/${w.id}`,
             };
         });
+    }
+
+    repoWebUrls(account: Account, repo: RepoRef): RepoWebUrls {
+        const base = account.baseUrl.replace(/\/+$/, "");
+        const { org, project, repo: repoName } = repo.path;
+        const o = encodeURIComponent(org);
+        const p = encodeURIComponent(project);
+        const r = encodeURIComponent(repoName);
+        // ADO's web filters auto-detect the logged-in user, so "mine" URLs
+        // don't need a username token. _a=mine and assignedtome views are
+        // available on cloud and on-prem TFS 2018+.
+        return {
+            myPrs: `${base}/${o}/${p}/_git/${r}/pullrequests?_a=mine`,
+            allPrs: `${base}/${o}/${p}/_git/${r}/pullrequests?_a=active`,
+            newPr: `${base}/${o}/${p}/_git/${r}/pullrequestcreate`,
+            myIssues: `${base}/${o}/${p}/_workitems/assignedtome/`,
+            allIssues: `${base}/${o}/${p}/_workitems/`,
+            // ADO requires a work item type for direct create URLs; a generic
+            // "+ New Work Item" entry doesn't exist as a deep link. Send the
+            // user to the work items page where the New button is one click.
+            newIssue: `${base}/${o}/${p}/_workitems/`,
+        };
     }
 }

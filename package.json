@@ -2,7 +2,7 @@
   "name": "multi-pr-explorer",
   "displayName": "Multi-PR Explorer",
   "description": "Workspace-scoped open PRs and assigned issues/work items across GitHub, GitLab, Bitbucket Cloud, and Azure DevOps. Per-repo issue-tracker override (e.g. GitLab code + Azure DevOps tickets).",
-  "version": "0.7.6",
+  "version": "0.8.0",
   "publisher": "vpatel071997",
   "license": "MIT",
   "engines": {
@@ -100,6 +100,36 @@
         "title": "Edit Account…",
         "icon": "$(edit)",
         "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.openMyPrs",
+        "title": "Open My PRs in Browser",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.openAllPrs",
+        "title": "Open All PRs in Browser",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.createPr",
+        "title": "Create PR in Browser",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.openMyIssues",
+        "title": "Open My Issues in Browser",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.openAllIssues",
+        "title": "Open All Issues in Browser",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.createIssue",
+        "title": "Create Issue in Browser",
+        "category": "Multi-PR"
       }
     ],
     "menus": {
@@ -160,6 +190,36 @@
           "command": "multiPrExplorer.copyUrl",
           "when": "view == multiPrExplorer.tree && viewItem == item",
           "group": "1_open"
+        },
+        {
+          "command": "multiPrExplorer.openMyPrs",
+          "when": "view == multiPrExplorer.tree && viewItem == section.prs",
+          "group": "1_open@1"
+        },
+        {
+          "command": "multiPrExplorer.openAllPrs",
+          "when": "view == multiPrExplorer.tree && viewItem == section.prs",
+          "group": "1_open@2"
+        },
+        {
+          "command": "multiPrExplorer.createPr",
+          "when": "view == multiPrExplorer.tree && viewItem == section.prs",
+          "group": "2_create"
+        },
+        {
+          "command": "multiPrExplorer.openMyIssues",
+          "when": "view == multiPrExplorer.tree && viewItem == section.issues",
+          "group": "1_open@1"
+        },
+        {
+          "command": "multiPrExplorer.openAllIssues",
+          "when": "view == multiPrExplorer.tree && viewItem == section.issues",
+          "group": "1_open@2"
+        },
+        {
+          "command": "multiPrExplorer.createIssue",
+          "when": "view == multiPrExplorer.tree && viewItem == section.issues",
+          "group": "2_create"
         }
       ]
     },

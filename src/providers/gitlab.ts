@@ -1,10 +1,14 @@
-import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
+import { Account, ProviderClient, PullItem, RepoRef, RepoWebUrls, TokenStatus } from "./types";
 import { probe, describeProbe } from "./http";
+
+interface User { username: string; }
 
 interface MergeRequest {
     iid: number;
     title: string;
-    author: { username: string };
+    author: User;
+    assignees?: User[];
+    reviewers?: User[];
     updated_at: string;
     web_url: string;
     draft?: boolean;
@@ -43,6 +47,9 @@ function parseUrl(url: string): { host: string; path: string; repo: string } | n
 }
 
 export class GitLabClient implements ProviderClient {
+    /** authenticated username per accountId; populated by verifyToken. */
+    private usernameByAccount = new Map<string, string>();
+
     parseRepoUrl(url: string, account: Account): RepoRef | null {
         const accHost = hostOf(account.baseUrl);
         const parsed = parseUrl(url);
@@ -67,7 +74,11 @@ export class GitLabClient implements ProviderClient {
         }
         try {
             const data = JSON.parse(p.bodyText ?? "{}") as { username?: string };
-            return { ok: true, user: data.username ?? "?" };
+            const username = data.username ?? "?";
+            if (data.username) {
+                this.usernameByAccount.set(account.id, data.username);
+            }
+            return { ok: true, user: username };
         } catch {
             return { ok: false, error: `bad JSON from ${url}` };
         }
@@ -82,7 +93,14 @@ export class GitLabClient implements ProviderClient {
             throw new Error(`GitLab MRs ${res.status}: ${await res.text()}`);
         }
         const data = (await res.json()) as MergeRequest[];
-        return data.map(mr => ({
+        const me = this.usernameByAccount.get(account.id);
+        const filtered = me
+            ? data.filter(mr =>
+                mr.author.username === me ||
+                mr.assignees?.some(a => a.username === me) ||
+                mr.reviewers?.some(r => r.username === me))
+            : data;
+        return filtered.map(mr => ({
             id: `!${mr.iid}`,
             title: mr.title,
             author: mr.author.username,
@@ -111,5 +129,20 @@ export class GitLabClient implements ProviderClient {
             updated: i.updated_at,
             url: i.web_url,
         }));
+    }
+
+    repoWebUrls(account: Account, repo: RepoRef): RepoWebUrls {
+        const base = account.baseUrl.replace(/\/+$/, "");
+        const r = `${base}/${repo.path.fullPath}`;
+        const me = this.usernameByAccount.get(account.id);
+        const mineQ = me ? `?state=opened&assignee_username=${encodeURIComponent(me)}` : `?state=opened`;
+        return {
+            myPrs: `${r}/-/merge_requests${mineQ}`,
+            allPrs: `${r}/-/merge_requests?state=opened`,
+            newPr: `${r}/-/merge_requests/new`,
+            myIssues: `${r}/-/issues${mineQ}`,
+            allIssues: `${r}/-/issues?state=opened`,
+            newIssue: `${r}/-/issues/new`,
+        };
     }
 }

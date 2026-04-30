@@ -10,8 +10,33 @@ import {
     IssueOverride,
 } from "./config";
 import { PrTreeProvider } from "./tree";
-import { Account, ProviderKind, PullItem } from "./providers/types";
+import { Account, ProviderKind, PullItem, RepoWebUrls } from "./providers/types";
+import { getClient } from "./providers";
 import { scanWorkspace, WorkspaceRepo } from "./workspace";
+
+/** Tree node argument passed to section-row context-menu commands. */
+interface SectionNodeArg {
+    section?: "prs" | "issues";
+    repo?: WorkspaceRepo;
+}
+
+type WebUrlKey = keyof RepoWebUrls;
+
+function openSectionWebUrl(node: SectionNodeArg | undefined, key: WebUrlKey): void {
+    if (!node?.repo || !node.section) { return; }
+    // PRs use repo.account/ref; Issues respect any per-repo issue-tracker
+    // override (ADO project for tickets, etc.) via repo.issueAccount/ref.
+    const isPrs = node.section === "prs";
+    const account = isPrs ? node.repo.account : node.repo.issueAccount;
+    const ref = isPrs ? node.repo.ref : node.repo.issueRef;
+    const urls = getClient(account.kind).repoWebUrls(account, ref);
+    const target = urls[key];
+    if (!target) {
+        vscode.window.showInformationMessage(`No ${key} URL available for ${account.kind}.`);
+        return;
+    }
+    vscode.env.openExternal(vscode.Uri.parse(target));
+}
 
 interface ProviderChoice {
     label: string;
@@ -110,6 +135,18 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
             tree.refresh();
             vscode.window.setStatusBarMessage("Multi-PR: re-testing all account tokens…", 3000);
         }),
+        vscode.commands.registerCommand("multiPrExplorer.openMyPrs",
+            (n?: SectionNodeArg) => openSectionWebUrl(n, "myPrs")),
+        vscode.commands.registerCommand("multiPrExplorer.openAllPrs",
+            (n?: SectionNodeArg) => openSectionWebUrl(n, "allPrs")),
+        vscode.commands.registerCommand("multiPrExplorer.createPr",
+            (n?: SectionNodeArg) => openSectionWebUrl(n, "newPr")),
+        vscode.commands.registerCommand("multiPrExplorer.openMyIssues",
+            (n?: SectionNodeArg) => openSectionWebUrl(n, "myIssues")),
+        vscode.commands.registerCommand("multiPrExplorer.openAllIssues",
+            (n?: SectionNodeArg) => openSectionWebUrl(n, "allIssues")),
+        vscode.commands.registerCommand("multiPrExplorer.createIssue",
+            (n?: SectionNodeArg) => openSectionWebUrl(n, "newIssue")),
     );
 
     ctx.subscriptions.push(

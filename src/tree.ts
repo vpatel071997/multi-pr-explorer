@@ -303,7 +303,7 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
             return new SectionNode(repo, section, [new ErrorNode(result.error)], 0);
         }
         if (result.length === 0) {
-            return new SectionNode(repo, section, [new ErrorNode(section === "prs" ? "No open PRs." : "No assigned issues.")], 0);
+            return new SectionNode(repo, section, [new ErrorNode(section === "prs" ? "No open PRs for you here." : "No assigned issues.")], 0);
         }
         const sorted = [...result].sort((a, b) => b.updated.localeCompare(a.updated));
         return new SectionNode(repo, section, sorted.map(it => new ItemNode(section, it)), sorted.length);

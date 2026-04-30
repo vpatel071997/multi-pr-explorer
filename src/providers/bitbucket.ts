@@ -1,4 +1,4 @@
-import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
+import { Account, ProviderClient, PullItem, RepoRef, RepoWebUrls, TokenStatus } from "./types";
 import { probe, describeProbe } from "./http";
 
 interface BbPullRequest {
@@ -117,7 +117,13 @@ export class BitbucketClient implements ProviderClient {
 
     async listPullRequests(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
         const base = bbApiRoot(account.baseUrl);
-        const url = `${base}/repositories/${encodeURIComponent(repo.path.workspace)}/${encodeURIComponent(repo.path.repo)}/pullrequests?state=OPEN&pagelen=50`;
+        // Filter server-side via BBQL to PRs where the user is the author OR a
+        // reviewer. If the username isn't cached yet, fall back to all open PRs.
+        const username = await this.getCachedUsername(account, token);
+        const q = username
+            ? `state="OPEN" AND (author.username="${username}" OR reviewers.username="${username}")`
+            : `state="OPEN"`;
+        const url = `${base}/repositories/${encodeURIComponent(repo.path.workspace)}/${encodeURIComponent(repo.path.repo)}/pullrequests?q=${encodeURIComponent(q)}&pagelen=50`;
         const res = await fetch(url, {
             headers: { Authorization: this.auth(token), Accept: "application/json" },
         });
@@ -170,5 +176,26 @@ export class BitbucketClient implements ProviderClient {
             updated: i.updated_on,
             url: i.links.html.href,
         }));
+    }
+
+    repoWebUrls(account: Account, repo: RepoRef): RepoWebUrls {
+        // Bitbucket Cloud's web UI lives at bitbucket.org regardless of which
+        // host the user pointed the account at.
+        const r = `https://bitbucket.org/${repo.path.workspace}/${repo.path.repo}`;
+        const me = this.usernameByAccount.get(account.id);
+        // Bitbucket Cloud has no first-class URL filter for "my PRs" — the UI
+        // exposes Author/Reviewer filters via interactive controls only. Send
+        // the user to the open-PRs list in both cases; the in-tree section
+        // already shows their filtered view.
+        return {
+            myPrs: `${r}/pull-requests/`,
+            allPrs: `${r}/pull-requests/`,
+            newPr: `${r}/pull-requests/new`,
+            myIssues: me
+                ? `${r}/issues?responsible=${encodeURIComponent(me)}&status=new&status=open`
+                : `${r}/issues?status=new&status=open`,
+            allIssues: `${r}/issues?status=new&status=open`,
+            newIssue: `${r}/issues/new`,
+        };
     }
 }

@@ -44,6 +44,21 @@ export interface TokenStatus {
     error?: string;
 }
 
+/**
+ * Provider-rendered browser URLs for the section context-menu actions.
+ * "my*" filters require the authenticated user to be known — providers that
+ * don't have it cached yet may fall back to the same URL as the corresponding
+ * "all*" entry. Returning null for a slot hides that menu item.
+ */
+export interface RepoWebUrls {
+    myPrs: string | null;
+    allPrs: string | null;
+    newPr: string | null;
+    myIssues: string | null;
+    allIssues: string | null;
+    newIssue: string | null;
+}
+
 export interface ProviderClient {
     /**
      * Try to parse this remote URL as belonging to this account's provider.
@@ -53,8 +68,14 @@ export interface ProviderClient {
     parseRepoUrl(url: string, account: Account): RepoRef | null;
     /** Hit a small authenticated endpoint to confirm the token works. */
     verifyToken(account: Account, token: string): Promise<TokenStatus>;
-    /** Fetch open PRs/MRs for the given repo. */
+    /** Fetch open PRs/MRs where the authenticated user is author or requested reviewer (or assignee where applicable). */
     listPullRequests(account: Account, token: string, repo: RepoRef): Promise<PullItem[]>;
     /** Fetch open issues/work items assigned to the authenticated user, scoped to this repo/project. */
     listIssues(account: Account, token: string, repo: RepoRef): Promise<PullItem[]>;
+    /**
+     * Browser URLs for the right-click section actions. Pure URL composition;
+     * no network. Providers that have cached the auth'd user (via verifyToken)
+     * fill the my* slots; others may return null.
+     */
+    repoWebUrls(account: Account, repo: RepoRef): RepoWebUrls;
 }

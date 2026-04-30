@@ -1,13 +1,17 @@
-import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
+import { Account, ProviderClient, PullItem, RepoRef, RepoWebUrls, TokenStatus } from "./types";
 import { probe, describeProbe } from "./http";
+
+interface User { login: string; }
 
 interface PullRequestItem {
     number: number;
     title: string;
-    user: { login: string };
+    user: User;
     updated_at: string;
     html_url: string;
     draft?: boolean;
+    requested_reviewers?: User[];
+    assignees?: User[];
 }
 
 interface SearchIssueItem {
@@ -71,7 +75,23 @@ function parseUrl(url: string): { host: string; owner: string; repo: string } | 
     return { host, owner: parts[0], repo: parts[1] };
 }
 
+/**
+ * Web URL host derived from baseUrl. cloud github.com stays as-is; Enterprise
+ * uses the host portion of baseUrl (so api.* and /api/v3 suffixes get stripped).
+ */
+function webHost(baseUrl: string): string {
+    const trimmed = baseUrl.replace(/\/+$/, "").replace(/\/api\/v\d+$/i, "");
+    const host = trimmed.replace(/^https?:\/\//i, "").split("/")[0].toLowerCase();
+    if (host === "api.github.com") {
+        return "https://github.com";
+    }
+    return `https://${host}`;
+}
+
 export class GitHubClient implements ProviderClient {
+    /** authenticated login per accountId; populated by verifyToken. */
+    private loginByAccount = new Map<string, string>();
+
     parseRepoUrl(url: string, account: Account): RepoRef | null {
         const accHost = hostOf(account.baseUrl);
         const parsed = parseUrl(url);
@@ -100,7 +120,11 @@ export class GitHubClient implements ProviderClient {
         }
         try {
             const data = JSON.parse(p.bodyText ?? "{}") as { login?: string };
-            return { ok: true, user: data.login ?? "?" };
+            const login = data.login ?? "?";
+            if (data.login) {
+                this.loginByAccount.set(account.id, data.login);
+            }
+            return { ok: true, user: login };
         } catch {
             return { ok: false, error: `bad JSON from ${url}` };
         }
@@ -108,13 +132,24 @@ export class GitHubClient implements ProviderClient {
 
     async listPullRequests(account: Account, token: string, repo: RepoRef): Promise<PullItem[]> {
         const api = apiBase(account.baseUrl);
+        // The /pulls endpoint includes user, requested_reviewers, and assignees
+        // by default — enough to filter to the authenticated user without an
+        // extra round trip and without losing the `draft` field that /search
+        // doesn't return.
         const url = `${api}/repos/${repo.path.owner}/${repo.path.repo}/pulls?state=open&per_page=100`;
         const res = await fetch(url, { headers: this.headers(token) });
         if (!res.ok) {
             throw new Error(`GitHub PRs ${res.status}: ${await res.text()}`);
         }
         const data = (await res.json()) as PullRequestItem[];
-        return data.map(pr => ({
+        const me = this.loginByAccount.get(account.id);
+        const filtered = me
+            ? data.filter(pr =>
+                pr.user.login === me ||
+                pr.requested_reviewers?.some(r => r.login === me) ||
+                pr.assignees?.some(a => a.login === me))
+            : data;
+        return filtered.map(pr => ({
             id: `#${pr.number}`,
             title: pr.title,
             author: pr.user.login,
@@ -146,5 +181,20 @@ export class GitHubClient implements ProviderClient {
             updated: it.updated_at,
             url: it.html_url,
         }));
+    }
+
+    repoWebUrls(account: Account, repo: RepoRef): RepoWebUrls {
+        const host = webHost(account.baseUrl);
+        const r = `${host}/${repo.path.owner}/${repo.path.repo}`;
+        const prFilterMine = encodeURIComponent("is:pr is:open author:@me OR review-requested:@me OR assignee:@me");
+        const issueFilterMine = encodeURIComponent("is:issue is:open assignee:@me");
+        return {
+            myPrs: `${r}/pulls?q=${prFilterMine}`,
+            allPrs: `${r}/pulls`,
+            newPr: `${r}/compare`,
+            myIssues: `${r}/issues?q=${issueFilterMine}`,
+            allIssues: `${r}/issues`,
+            newIssue: `${r}/issues/new`,
+        };
     }
 }

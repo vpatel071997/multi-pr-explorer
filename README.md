@@ -221,6 +221,19 @@ For periodic auto-refresh, set:
     the SecretStorage token.
 - **On a repo node:** *Open Repo in Browser*; *Map Issue Tracker…* (the
   guided wizard for the GitLab + ADO style of mixed setup).
+- **On the *Pull Requests* row** (under a repo):
+  - *Open My PRs in Browser* — provider's web list filtered to PRs you
+    authored / are assigned / are reviewing. Useful when you need to act on
+    one that's not currently in the tree (closed, drafts you toggled, etc.).
+  - *Open All PRs in Browser* — full list, no user filter.
+  - *Create PR in Browser* — jumps straight to the provider's new-PR page
+    for this repo.
+- **On the *Issues / Tickets* row** (under a repo):
+  - *Open My Issues in Browser* — provider's web list filtered to assigned-to-you.
+  - *Open All Issues in Browser* — full list.
+  - *Create Issue in Browser* — new-issue / new-work-item page for this
+    repo (Azure DevOps lands on the work-items page since direct create
+    needs a work-item type).
 - **On a PR/issue row:** *Open in Browser* (also fires on click) and *Copy URL*.
 
 ### Removing an account
@@ -312,6 +325,28 @@ Right-click the account row → *Update Token…*. Paste the fresh token; the
 dot turns green on the next refresh. The account id and any issue-tracker
 overrides that reference it stay intact.
 
+**`fetch failed ECONNREFUSED` (or any `ECONNREFUSED` in the tooltip).**
+The plugin's HTTPS request never reached the provider — the OS refused the
+connection at TCP. The token is fine; it's a network/proxy problem. Check
+your shell's `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` env vars (VS Code
+inherits them on launch):
+```powershell
+echo $env:HTTPS_PROXY ; echo $env:NO_PROXY
+```
+Then run the same request curl would make and watch the proxy lines:
+```powershell
+curl -v https://YOUR-HOST/api/v4/user
+```
+Common causes:
+- `HTTPS_PROXY` points at a corporate proxy (often `localhost:<port>`) that
+  isn't running. Start it, unset the variable, or fix the port.
+- The host you're talking to isn't in `NO_PROXY`. `NO_PROXY` is a
+  comma-separated suffix list — `.com,.io,.local,localhost` matches
+  `gitlab.com` but **not** `gitlab.acme.tools`. Add the missing suffix (or
+  the exact host) and restart VS Code.
+- Two GitLab accounts where one works and one doesn't almost always means
+  the failing host's TLD isn't in `NO_PROXY`.
+
 **Where's my token stored?**
 `vscode.SecretStorage`, keyed by `multiPrExplorer.token.<account-id>`. Not
 in settings, not in the workspace, not on disk in plaintext. The
@@ -321,12 +356,19 @@ in settings, not in the workspace, not on disk in plaintext. The
 
 ## Reference: what's queried per workspace repo
 
+PR queries are filtered client-side after fetch (GitHub / GitLab / ADO) or
+server-side via the provider's query language (Bitbucket BBQL) to PRs where
+the authenticated user is the **author**, an **assignee**, or a **requested
+reviewer**. The cached username/id used for that filter comes from the
+`verifyToken` probe — if the dot in the *Accounts* section is green, the
+filter is active.
+
 | Provider     | Pull requests                                                                              | Issues / tickets                                                                                     |
 |---|---|---|
-| GitHub       | `GET /repos/{owner}/{repo}/pulls?state=open`                                               | `GET /repos/{owner}/{repo}/issues?state=open&assignee=*` (PRs filtered out via `pull_request` field) |
-| GitLab       | `GET /api/v4/projects/{path}/merge_requests?state=opened`                                   | `GET /api/v4/projects/{path}/issues?state=opened&scope=assigned_to_me`                                |
-| Bitbucket    | `GET /2.0/repositories/{ws}/{repo}/pullrequests?state=OPEN`                                 | `GET /2.0/repositories/{ws}/{repo}/issues?status=new&status=open` (404 ⇒ tracker disabled, empty)    |
-| Azure DevOps | `GET /{org}/{project}/_apis/git/repositories/{repo}/pullrequests?searchCriteria.status=active` | WIQL `[System.TeamProject] = '{project}' AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed','Done','Removed','Resolved')` then batch GET `/_apis/wit/workitems` |
+| GitHub       | `GET /repos/{owner}/{repo}/pulls?state=open` → keep `pr.user.login==me \|\| requested_reviewers \|\| assignees` | `GET /search/issues?q=is:issue+is:open+assignee:@me+repo:{owner}/{repo}` |
+| GitLab       | `GET /api/v4/projects/{path}/merge_requests?state=opened` → keep `author/assignees/reviewers username==me` | `GET /api/v4/projects/{path}/issues?state=opened&scope=assigned_to_me`                                |
+| Bitbucket    | `GET /2.0/.../pullrequests?q=state="OPEN" AND (author.username="me" OR reviewers.username="me")` | `GET /2.0/.../issues?q=state-clauses AND assignee.username="me"` (404 ⇒ tracker disabled, empty)    |
+| Azure DevOps | `GET /{org}/{project}/_apis/git/repositories/{repo}/pullrequests?searchCriteria.status=active` → keep `createdBy.id==me \|\| reviewers[].id==me` | WIQL `[System.TeamProject] = '{project}' AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed','Done','Removed','Resolved')` then batch GET `/_apis/wit/workitems` |
 
 ---
 
@@ -345,7 +387,7 @@ extension loaded — useful for iterating without packaging.
 
 ---
 
-## Limitations (v0.7)
+## Limitations (v0.8)
 
 - Bitbucket **Server** (self-hosted Stash) is not supported — its REST API
   (`/rest/api/1.0/…`) differs from Bitbucket Cloud's. Azure DevOps
