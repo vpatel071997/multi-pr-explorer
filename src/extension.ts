@@ -4,6 +4,7 @@ import {
     addAccount,
     listAccounts,
     removeAccount,
+    saveAccounts,
     getRefreshIntervalMinutes,
     listIssueOverrides,
     IssueOverride,
@@ -89,8 +90,14 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         vscode.commands.registerCommand("multiPrExplorer.addAccount", () =>
             addAccountFlow(tokens, tree)
         ),
-        vscode.commands.registerCommand("multiPrExplorer.removeAccount", () =>
-            removeAccountFlow(tokens, tree)
+        vscode.commands.registerCommand("multiPrExplorer.removeAccount", (node?: { account?: Account }) =>
+            removeAccountFlow(tokens, tree, node?.account)
+        ),
+        vscode.commands.registerCommand("multiPrExplorer.updateAccountToken", (node?: { account?: Account }) =>
+            updateAccountTokenFlow(tokens, tree, node?.account)
+        ),
+        vscode.commands.registerCommand("multiPrExplorer.editAccount", (node?: { account?: Account }) =>
+            editAccountFlow(tokens, tree, node?.account)
         ),
         vscode.commands.registerCommand("multiPrExplorer.mapIssueTracker", (node?: { repo?: WorkspaceRepo }) =>
             mapIssueTrackerFlow(tokens, tree, node?.repo)
@@ -231,30 +238,169 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
     }
 }
 
-async function removeAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise<void> {
-    const accounts = listAccounts();
-    if (accounts.length === 0) {
-        vscode.window.showInformationMessage("No accounts configured.");
-        return;
+async function removeAccountFlow(tokens: TokenStore, tree: PrTreeProvider, preset?: Account): Promise<void> {
+    let target = preset;
+    if (!target) {
+        const accounts = listAccounts();
+        if (accounts.length === 0) {
+            vscode.window.showInformationMessage("No accounts configured.");
+            return;
+        }
+        const pick = await vscode.window.showQuickPick(
+            accounts.map(a => ({
+                label: a.label,
+                description: `${a.kind} • ${a.baseUrl}`,
+                account: a,
+            })),
+            { placeHolder: "Account to remove", ignoreFocusOut: true }
+        );
+        if (!pick) { return; }
+        target = pick.account;
     }
-    const pick = await vscode.window.showQuickPick(
-        accounts.map(a => ({
-            label: a.label,
-            description: `${a.kind} • ${a.baseUrl}`,
-            account: a,
-        })),
-        { placeHolder: "Account to remove", ignoreFocusOut: true }
-    );
-    if (!pick) { return; }
     const confirm = await vscode.window.showWarningMessage(
-        `Remove "${pick.account.label}"? Token will be deleted from SecretStorage.`,
+        `Remove "${target.label}"? Token will be deleted from SecretStorage.`,
         { modal: true },
         "Remove"
     );
     if (confirm !== "Remove") { return; }
-    await removeAccount(pick.account.id);
-    await tokens.delete(pick.account.id);
+    await removeAccount(target.id);
+    await tokens.delete(target.id);
     tree.refresh();
+}
+
+async function updateAccountTokenFlow(tokens: TokenStore, tree: PrTreeProvider, preset?: Account): Promise<void> {
+    let target = preset;
+    if (!target) {
+        const accounts = listAccounts();
+        if (accounts.length === 0) {
+            vscode.window.showInformationMessage("No accounts configured.");
+            return;
+        }
+        const pick = await vscode.window.showQuickPick(
+            accounts.map(a => ({
+                label: a.label,
+                description: `${a.kind} • ${a.baseUrl}`,
+                account: a,
+            })),
+            { placeHolder: "Update token for which account?", ignoreFocusOut: true }
+        );
+        if (!pick) { return; }
+        target = pick.account;
+    }
+    const tokenPrompt = providerForKind(target.kind)?.tokenPrompt
+        ?? "New Personal Access Token";
+    const newToken = await vscode.window.showInputBox({
+        prompt: `${tokenPrompt} for "${target.label}"`,
+        password: true,
+        ignoreFocusOut: true,
+    });
+    if (!newToken) { return; }
+    await tokens.set(target.id, newToken);
+    tree.refresh();
+    vscode.window.setStatusBarMessage(`Token updated for ${target.label}`, 3000);
+}
+
+async function editAccountFlow(tokens: TokenStore, tree: PrTreeProvider, preset?: Account): Promise<void> {
+    let target = preset;
+    if (!target) {
+        const accounts = listAccounts();
+        if (accounts.length === 0) {
+            vscode.window.showInformationMessage("No accounts configured.");
+            return;
+        }
+        const pick = await vscode.window.showQuickPick(
+            accounts.map(a => ({
+                label: a.label,
+                description: `${a.kind} • ${a.baseUrl}`,
+                account: a,
+            })),
+            { placeHolder: "Edit which account?", ignoreFocusOut: true }
+        );
+        if (!pick) { return; }
+        target = pick.account;
+    }
+
+    // The kind isn't editable — providers parse URLs and call APIs differently.
+    // Changing kind would orphan the token (id has the kind prefix); user
+    // should remove + re-add for that.
+    const newLabel = await vscode.window.showInputBox({
+        prompt: `Account label for ${target.kind}`,
+        value: target.label,
+        ignoreFocusOut: true,
+    });
+    if (newLabel === undefined) { return; }
+
+    const newBaseUrl = await vscode.window.showInputBox({
+        prompt: "Base URL",
+        value: target.baseUrl,
+        ignoreFocusOut: true,
+    });
+    if (newBaseUrl === undefined) { return; }
+
+    const newExtra: Record<string, string> = { ...(target.extra ?? {}) };
+    if (target.kind === "bitbucket") {
+        const ws = await vscode.window.showInputBox({
+            prompt: "Bitbucket workspace slug",
+            value: target.extra?.workspace ?? "",
+            ignoreFocusOut: true,
+        });
+        if (ws === undefined) { return; }
+        if (ws.trim()) { newExtra.workspace = ws.trim(); }
+        else { delete newExtra.workspace; }
+    } else if (target.kind === "azure") {
+        const org = await vscode.window.showInputBox({
+            prompt: "Azure DevOps organization slug",
+            value: target.extra?.organization ?? "",
+            ignoreFocusOut: true,
+        });
+        if (org === undefined) { return; }
+        if (org.trim()) { newExtra.organization = org.trim(); }
+        else { delete newExtra.organization; }
+    }
+
+    const tokenAction = await vscode.window.showQuickPick(
+        [
+            { label: "Keep existing token", value: "keep" as const, picked: true },
+            { label: "Replace token now", value: "replace" as const },
+        ],
+        { placeHolder: "Token", ignoreFocusOut: true }
+    );
+    if (!tokenAction) { return; }
+
+    let newTokenValue: string | undefined;
+    if (tokenAction.value === "replace") {
+        const tokenPrompt = providerForKind(target.kind)?.tokenPrompt
+            ?? "Personal Access Token";
+        newTokenValue = await vscode.window.showInputBox({
+            prompt: tokenPrompt,
+            password: true,
+            ignoreFocusOut: true,
+        });
+        if (!newTokenValue) { return; }
+    }
+
+    const updatedAccount: Account = {
+        ...target,
+        label: newLabel.trim() || target.label,
+        baseUrl: newBaseUrl.trim() || target.baseUrl,
+        ...(Object.keys(newExtra).length > 0 ? { extra: newExtra } : {}),
+    };
+    // Strip empty extra if cleared.
+    if (Object.keys(newExtra).length === 0) {
+        delete (updatedAccount as { extra?: Record<string, string> }).extra;
+    }
+
+    const accounts = listAccounts().map(a => a.id === target!.id ? updatedAccount : a);
+    await saveAccounts(accounts);
+    if (newTokenValue) {
+        await tokens.set(target.id, newTokenValue);
+    }
+    tree.refresh();
+    vscode.window.showInformationMessage(`Updated "${updatedAccount.label}".`);
+}
+
+function providerForKind(kind: ProviderKind): ProviderChoice | undefined {
+    return PROVIDERS.find(p => p.kind === kind);
 }
 
 function slugify(s: string): string {

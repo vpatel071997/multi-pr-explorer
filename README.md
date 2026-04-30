@@ -172,7 +172,19 @@ For periodic auto-refresh, set:
 
 ### Right-click actions
 
-- **On a repo node:** *Open Repo in Browser* — opens the repo's web page.
+- **On an account row** (in the *Accounts* section):
+  - *Update Token…* — quickest fix when the dot is red. Single password
+    prompt; replaces the SecretStorage entry; tree re-verifies on the next
+    refresh.
+  - *Edit Account…* — change the label, base URL, or provider-specific
+    extras (Bitbucket workspace, ADO organization). Optionally also rotate
+    the token in the same flow. The account's `id` (and therefore its
+    secret-storage key) is preserved, so existing issue-tracker overrides
+    that reference it by id keep working.
+  - *Remove Account…* — confirms, then deletes both the config entry and
+    the SecretStorage token.
+- **On a repo node:** *Open Repo in Browser*; *Map Issue Tracker…* (the
+  guided wizard for the GitLab + ADO style of mixed setup).
 - **On a PR/issue row:** *Open in Browser* (also fires on click) and *Copy URL*.
 
 ### Removing an account
@@ -259,9 +271,10 @@ matches that host and refresh.
 Shouldn't happen with v0.3 (per-repo queries) — open an issue with the URL
 and your provider's response if you see it.
 
-**Token revoked / 401 / 403.**
-Remove the account, generate a new token, re-add. There's no in-place token
-update yet.
+**Token revoked / 401 / 403 (red dot in the *Accounts* section).**
+Right-click the account row → *Update Token…*. Paste the fresh token; the
+dot turns green on the next refresh. The account id and any issue-tracker
+overrides that reference it stay intact.
 
 **Where's my token stored?**
 `vscode.SecretStorage`, keyed by `multiPrExplorer.token.<account-id>`. Not

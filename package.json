@@ -2,7 +2,7 @@
   "name": "multi-pr-explorer",
   "displayName": "Multi-PR Explorer",
   "description": "Workspace-scoped open PRs and assigned issues/work items across GitHub, GitLab, Bitbucket Cloud, and Azure DevOps. Per-repo issue-tracker override (e.g. GitLab code + Azure DevOps tickets).",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "vpatel071997",
   "license": "MIT",
   "engines": {
@@ -88,6 +88,18 @@
         "title": "Test Connections",
         "icon": "$(beaker)",
         "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.updateAccountToken",
+        "title": "Update Token…",
+        "icon": "$(key)",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.editAccount",
+        "title": "Edit Account…",
+        "icon": "$(edit)",
+        "category": "Multi-PR"
       }
     ],
     "menus": {
@@ -114,6 +126,21 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "multiPrExplorer.updateAccountToken",
+          "when": "view == multiPrExplorer.tree && viewItem == account-status",
+          "group": "1_modify@1"
+        },
+        {
+          "command": "multiPrExplorer.editAccount",
+          "when": "view == multiPrExplorer.tree && viewItem == account-status",
+          "group": "1_modify@2"
+        },
+        {
+          "command": "multiPrExplorer.removeAccount",
+          "when": "view == multiPrExplorer.tree && viewItem == account-status",
+          "group": "9_destructive"
+        },
         {
           "command": "multiPrExplorer.openRepo",
           "when": "view == multiPrExplorer.tree && viewItem == repo",
