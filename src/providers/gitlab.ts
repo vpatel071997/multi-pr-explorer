@@ -6,6 +6,8 @@ interface MergeRequest {
     author: { username: string };
     updated_at: string;
     web_url: string;
+    draft?: boolean;
+    work_in_progress?: boolean;
 }
 
 interface Issue {
@@ -72,6 +74,8 @@ export class GitLabClient implements ProviderClient {
             repo: repo.displayName,
             updated: mr.updated_at,
             url: mr.web_url,
+            // GitLab renamed work_in_progress to draft a few releases back; keep both.
+            draft: mr.draft === true || mr.work_in_progress === true,
         }));
     }
 

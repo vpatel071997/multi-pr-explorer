@@ -5,6 +5,7 @@ interface AdoPullRequest {
     title: string;
     createdBy?: { displayName?: string; uniqueName?: string };
     creationDate: string;
+    isDraft?: boolean;
     repository: {
         name: string;
         project: { name: string };
@@ -83,6 +84,7 @@ export class AzureClient implements ProviderClient {
             repo: repo.displayName,
             updated: pr.creationDate,
             url: `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repoName)}/pullrequest/${pr.pullRequestId}`,
+            draft: pr.isDraft === true,
         }));
     }
 

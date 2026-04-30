@@ -6,6 +6,7 @@ interface PullRequestItem {
     user: { login: string };
     updated_at: string;
     html_url: string;
+    draft?: boolean;
 }
 
 interface IssueItem {
@@ -87,6 +88,7 @@ export class GitHubClient implements ProviderClient {
             repo: repo.displayName,
             updated: pr.updated_at,
             url: pr.html_url,
+            draft: pr.draft === true,
         }));
     }
 

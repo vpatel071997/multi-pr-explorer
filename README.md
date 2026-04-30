@@ -90,6 +90,43 @@ When prompted for a **workspace**, enter the slug from your Bitbucket URL
 
 ---
 
+## Mixing providers (GitLab code + Azure DevOps tickets)
+
+Common setup: code lives on GitLab (so PRs/MRs come from there) but tickets
+live in Azure DevOps Boards. Wire it up like this:
+
+1. **Add both accounts** — one GitLab account, one Azure DevOps account.
+   Note the ADO account's **label** (we'll use it in the override below).
+2. **Map the issue tracker.** Open `settings.json` (Ctrl+Shift+P →
+   *Preferences: Open User Settings (JSON)*) and add:
+   ```json
+   "multiPrExplorer.issueTrackerMap": [
+     {
+       "matches": "gitlab.acme.com",
+       "account": "Work ADO",
+       "project": "Backend"
+     }
+   ]
+   ```
+   - `matches` is a substring of the repo's git remote URL (case-insensitive).
+     `gitlab.acme.com/team/` works if you only want a subset; `gitlab.acme.com`
+     covers the whole instance.
+   - `account` accepts either the account's **label** or its **id** (the
+     `id` field under `multiPrExplorer.accounts`). Label is friendlier;
+     id is stable across renames.
+   - `project` is the Azure DevOps Team Project you want assigned tickets
+     for. Required when the target account is Azure DevOps.
+3. **Refresh** — the affected repos will show *Pull Requests* from GitLab
+   and *Issues / Tickets* from ADO. The repo node's description shows
+   `issues→Work ADO` so you can tell at a glance the override is active.
+
+Multiple overrides are supported. The first matching entry wins, so put more
+specific patterns above broader ones.
+
+If the override target can't be resolved (typo in `account`, missing
+`project`), the tree falls back to using the same account for issues as for
+PRs and the description tag isn't shown.
+
 ## Day-to-day use
 
 ### Looking at one repo
@@ -118,6 +155,17 @@ in your settings controls which one is used — edit
 Manual: click the refresh icon in the panel header. Automatic: the tree
 re-fetches whenever workspace folders change or whenever the account list
 changes.
+
+For periodic auto-refresh, set:
+```json
+"multiPrExplorer.refreshIntervalMinutes": 10
+```
+`0` (default) disables it.
+
+### Right-click actions
+
+- **On a repo node:** *Open Repo in Browser* — opens the repo's web page.
+- **On a PR/issue row:** *Open in Browser* (also fires on click) and *Copy URL*.
 
 ### Removing an account
 
@@ -223,7 +271,7 @@ extension loaded — useful for iterating without packaging.
 
 ---
 
-## Limitations (v0.3)
+## Limitations (v0.4)
 
 - Bitbucket **Server** (self-hosted Stash) and Azure DevOps **Server** are
   not supported — different APIs, different auth.

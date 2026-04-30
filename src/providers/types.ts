@@ -31,6 +31,8 @@ export interface PullItem {
     updated: string;
     /** Browser URL to open on click. */
     url: string;
+    /** True for draft PRs/MRs. Issues/work items leave this undefined. */
+    draft?: boolean;
 }
 
 export interface ProviderClient {

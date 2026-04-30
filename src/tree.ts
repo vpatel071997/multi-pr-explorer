@@ -70,8 +70,18 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
             case "repo": {
                 const t = new vscode.TreeItem(node.repo.ref.displayName, vscode.TreeItemCollapsibleState.Expanded);
                 t.iconPath = new vscode.ThemeIcon("repo");
-                t.description = `${node.repo.account.label} • ${node.repo.account.kind}`;
-                t.tooltip = `${node.repo.folder.name}\n${node.repo.remoteUrl}\nvia account: ${node.repo.account.label}`;
+                const issueAcc = node.repo.issueOverridden
+                    ? ` • issues→${node.repo.issueAccount.label}`
+                    : "";
+                t.description = `${node.repo.account.label} • ${node.repo.account.kind}${issueAcc}`;
+                t.tooltip = [
+                    node.repo.folder.name,
+                    node.repo.remoteUrl,
+                    `PR account: ${node.repo.account.label}`,
+                    node.repo.issueOverridden
+                        ? `Issue account (override): ${node.repo.issueAccount.label}`
+                        : `Issue account: ${node.repo.issueAccount.label}`,
+                ].join("\n");
                 t.contextValue = "repo";
                 return t;
             }
@@ -97,9 +107,16 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
             }
             case "item": {
                 const it = node.item;
-                const t = new vscode.TreeItem(`${it.id}  ${it.title}`, vscode.TreeItemCollapsibleState.None);
+                const draftPrefix = it.draft ? "[Draft] " : "";
+                const t = new vscode.TreeItem(`${it.id}  ${draftPrefix}${it.title}`, vscode.TreeItemCollapsibleState.None);
                 t.description = `${it.author} • ${formatRelative(it.updated)}`;
-                t.tooltip = `${it.title}\n${node.section === "prs" ? "Author" : "Assignee"}: ${it.author}\nUpdated: ${it.updated}\n${it.url}`;
+                t.tooltip = [
+                    it.title,
+                    `${node.section === "prs" ? "Author" : "Assignee"}: ${it.author}`,
+                    `Updated: ${it.updated}`,
+                    it.draft ? "Status: Draft" : null,
+                    it.url,
+                ].filter(Boolean).join("\n");
                 t.iconPath = new vscode.ThemeIcon(node.section === "prs" ? "git-pull-request" : "issues");
                 t.command = {
                     command: "multiPrExplorer.openItem",
@@ -138,7 +155,7 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     private async buildRoot(): Promise<TreeNode[]> {
         const accounts = listAccounts();
         if (accounts.length === 0) {
-            return [new InfoNode("No accounts configured. Click + to add one.")];
+            return [];
         }
         const folders = vscode.workspace.workspaceFolders ?? [];
         if (folders.length === 0) {
@@ -159,19 +176,30 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     }
 
     private async buildRepoNode(repo: WorkspaceRepo): Promise<RepoNode> {
-        const token = await this.tokens.get(repo.account.id);
-        if (!token) {
-            return new RepoNode(repo, [
-                new SectionNode(repo, "prs", [new ErrorNode(`No token in SecretStorage for "${repo.account.label}". Remove and re-add the account.`)], 0),
-            ]);
+        const prToken = await this.tokens.get(repo.account.id);
+        const issueToken = repo.issueAccount.id === repo.account.id
+            ? prToken
+            : await this.tokens.get(repo.issueAccount.id);
+
+        const sections: SectionNode[] = [];
+
+        if (!prToken) {
+            sections.push(new SectionNode(repo, "prs", [new ErrorNode(`No token for "${repo.account.label}". Re-add the account.`)], 0));
+        } else {
+            const prClient = getClient(repo.account.kind);
+            const prs = await this.safeFetch(() => prClient.listPullRequests(repo.account, prToken, repo.ref));
+            sections.push(this.toSection(repo, "prs", prs));
         }
-        const client = getClient(repo.account.kind);
-        const prs = await this.safeFetch(() => client.listPullRequests(repo.account, token, repo.ref));
-        const issues = await this.safeFetch(() => client.listIssues(repo.account, token, repo.ref));
-        return new RepoNode(repo, [
-            this.toSection(repo, "prs", prs),
-            this.toSection(repo, "issues", issues),
-        ]);
+
+        if (!issueToken) {
+            sections.push(new SectionNode(repo, "issues", [new ErrorNode(`No token for "${repo.issueAccount.label}". Re-add the account.`)], 0));
+        } else {
+            const issueClient = getClient(repo.issueAccount.kind);
+            const issues = await this.safeFetch(() => issueClient.listIssues(repo.issueAccount, issueToken, repo.issueRef));
+            sections.push(this.toSection(repo, "issues", issues));
+        }
+
+        return new RepoNode(repo, sections);
     }
 
     private async safeFetch(fn: () => Promise<PullItem[]>): Promise<PullItem[] | { error: string }> {

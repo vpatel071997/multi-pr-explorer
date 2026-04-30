@@ -1,8 +1,8 @@
 {
   "name": "multi-pr-explorer",
   "displayName": "Multi-PR Explorer",
-  "description": "Workspace-scoped open PRs and assigned issues/work items across GitHub, GitLab, Bitbucket Cloud, and Azure DevOps. Only fetches for repos open in the current VS Code window.",
-  "version": "0.3.0",
+  "description": "Workspace-scoped open PRs and assigned issues/work items across GitHub, GitLab, Bitbucket Cloud, and Azure DevOps. Per-repo issue-tracker override (e.g. GitLab code + Azure DevOps tickets).",
+  "version": "0.4.0",
   "publisher": "vpatel071997",
   "license": "MIT",
   "engines": {
@@ -29,11 +29,17 @@
       "multiPrExplorer": [
         {
           "id": "multiPrExplorer.tree",
-          "name": "Open PRs / MRs",
+          "name": "Open PRs / Issues",
           "icon": "$(git-pull-request)"
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "multiPrExplorer.tree",
+        "contents": "Multi-PR Explorer is workspace-scoped. To get started:\n\n[Add Account](command:multiPrExplorer.addAccount)\n\nThen open a folder whose git remote points at one of your provider hosts (GitHub, GitLab, Bitbucket Cloud, or Azure DevOps).\n\nFor mixed setups (e.g. GitLab code + Azure DevOps tickets), see the [README](https://github.com/vpatel071997/multi-pr-explorer#mixing-providers-gitlab-code--azure-devops-tickets) on how to map an issue tracker per repo."
+      }
+    ],
     "commands": [
       {
         "command": "multiPrExplorer.refresh",
@@ -56,6 +62,16 @@
         "command": "multiPrExplorer.openItem",
         "title": "Open in Browser",
         "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.openRepo",
+        "title": "Open Repo in Browser",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.copyUrl",
+        "title": "Copy URL",
+        "category": "Multi-PR"
       }
     ],
     "menus": {
@@ -74,6 +90,23 @@
           "command": "multiPrExplorer.removeAccount",
           "when": "view == multiPrExplorer.tree",
           "group": "1_modify"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "multiPrExplorer.openRepo",
+          "when": "view == multiPrExplorer.tree && viewItem == repo",
+          "group": "1_open"
+        },
+        {
+          "command": "multiPrExplorer.openItem",
+          "when": "view == multiPrExplorer.tree && viewItem == item",
+          "group": "1_open"
+        },
+        {
+          "command": "multiPrExplorer.copyUrl",
+          "when": "view == multiPrExplorer.tree && viewItem == item",
+          "group": "1_open"
         }
       ]
     },
@@ -95,7 +128,7 @@
             "properties": {
               "id": {
                 "type": "string",
-                "description": "Unique identifier for this account; used as the SecretStorage key for the token."
+                "description": "Unique identifier; used as the SecretStorage key for the token."
               },
               "label": {
                 "type": "string",
@@ -121,6 +154,38 @@
               }
             }
           }
+        },
+        "multiPrExplorer.issueTrackerMap": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Optional per-repo override: route the **Issues / Tickets** section of matching repos to a different account (e.g. GitLab code + Azure DevOps tickets). The PR section is unaffected.\n\nExample:\n```jsonc\n[\n  {\n    \"matches\": \"gitlab.acme.com/team/\",\n    \"account\": \"Work ADO\",\n    \"project\": \"Backend\"\n  }\n]\n```",
+          "items": {
+            "type": "object",
+            "required": [
+              "matches",
+              "account"
+            ],
+            "properties": {
+              "matches": {
+                "type": "string",
+                "description": "Substring matched (case-insensitive) against the repo's git remote URL."
+              },
+              "account": {
+                "type": "string",
+                "description": "Account label or id (the `id` field from multiPrExplorer.accounts) to use for issues on matching repos."
+              },
+              "project": {
+                "type": "string",
+                "description": "Azure DevOps Team Project name. Required when the target account is `azure`. Ignored otherwise."
+              }
+            }
+          }
+        },
+        "multiPrExplorer.refreshIntervalMinutes": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "Auto-refresh the tree every N minutes. `0` disables auto-refresh (the default — manual refresh only)."
         }
       }
     }

@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { TokenStore } from "./auth";
-import { addAccount, listAccounts, removeAccount } from "./config";
+import { addAccount, listAccounts, removeAccount, getRefreshIntervalMinutes } from "./config";
 import { PrTreeProvider } from "./tree";
 import { Account, ProviderKind, PullItem } from "./providers/types";
 
@@ -39,9 +39,11 @@ const PROVIDERS: ProviderChoice[] = [
         kind: "azure",
         defaultBaseUrl: "https://dev.azure.com",
         needsExtra: "organization",
-        tokenPrompt: "Azure DevOps Personal Access Token (Code: Read scope)",
+        tokenPrompt: "Azure DevOps Personal Access Token (Code: Read + Work Items: Read)",
     },
 ];
+
+let refreshTimer: NodeJS.Timeout | null = null;
 
 export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     const tokens = new TokenStore(ctx.secrets);
@@ -60,6 +62,22 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
                 vscode.env.openExternal(vscode.Uri.parse(item.url));
             }
         }),
+        vscode.commands.registerCommand("multiPrExplorer.openRepo", (node: { repo?: { remoteUrl?: string } } | undefined) => {
+            const url = node?.repo?.remoteUrl;
+            if (!url) { return; }
+            const web = remoteToWebUrl(url);
+            if (web) {
+                vscode.env.openExternal(vscode.Uri.parse(web));
+            } else {
+                vscode.window.showWarningMessage(`Don't know how to open this remote in a browser: ${url}`);
+            }
+        }),
+        vscode.commands.registerCommand("multiPrExplorer.copyUrl", async (item: PullItem) => {
+            if (item?.url) {
+                await vscode.env.clipboard.writeText(item.url);
+                vscode.window.setStatusBarMessage(`Copied: ${item.url}`, 2000);
+            }
+        }),
         vscode.commands.registerCommand("multiPrExplorer.addAccount", () =>
             addAccountFlow(tokens, tree)
         ),
@@ -70,28 +88,69 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
 
     ctx.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration("multiPrExplorer.accounts")) {
+            if (e.affectsConfiguration("multiPrExplorer.accounts") ||
+                e.affectsConfiguration("multiPrExplorer.issueTrackerMap")) {
                 tree.refresh();
             }
+            if (e.affectsConfiguration("multiPrExplorer.refreshIntervalMinutes")) {
+                restartAutoRefresh(tree);
+            }
         }),
-        vscode.workspace.onDidChangeWorkspaceFolders(() => tree.refresh())
+        vscode.workspace.onDidChangeWorkspaceFolders(() => tree.refresh()),
+        { dispose: () => stopAutoRefresh() }
     );
+
+    restartAutoRefresh(tree);
 }
 
 export function deactivate(): void {
-    /* no-op */
+    stopAutoRefresh();
+}
+
+function restartAutoRefresh(tree: PrTreeProvider): void {
+    stopAutoRefresh();
+    const minutes = getRefreshIntervalMinutes();
+    if (minutes <= 0) { return; }
+    refreshTimer = setInterval(() => tree.refresh(), minutes * 60 * 1000);
+}
+
+function stopAutoRefresh(): void {
+    if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+    }
+}
+
+/** Convert a git remote URL into a browser URL. Returns null if we can't tell. */
+function remoteToWebUrl(remote: string): string | null {
+    const trimmed = remote.replace(/\.git$/, "").replace(/\/+$/, "");
+    // Already an HTTPS URL — just return after stripping .git.
+    if (/^https?:\/\//i.test(trimmed)) {
+        return trimmed;
+    }
+    // ssh://git@host/path or git@host:path
+    let m = trimmed.match(/^ssh:\/\/[^@]+@([^/]+)\/(.+)$/);
+    if (m) { return `https://${m[1]}/${m[2]}`; }
+    m = trimmed.match(/^[^@]+@([^:]+):(.+)$/);
+    if (m) {
+        const host = m[1];
+        const path = m[2];
+        // Azure DevOps SSH: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
+        const ado = path.match(/^v3\/([^/]+)\/([^/]+)\/([^/]+)$/);
+        if (ado && /^ssh\.dev\.azure\.com$/i.test(host)) {
+            return `https://dev.azure.com/${ado[1]}/${ado[2]}/_git/${ado[3]}`;
+        }
+        return `https://${host}/${path}`;
+    }
+    return null;
 }
 
 async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise<void> {
-    // ignoreFocusOut keeps each prompt open when the user alt-tabs to a browser
-    // to grab a token; without it the dropdown silently dismisses on focus loss.
     const provider = await vscode.window.showQuickPick(
         PROVIDERS.map(p => ({ label: p.label, provider: p })),
         { placeHolder: "Provider", ignoreFocusOut: true }
     );
-    if (!provider) {
-        return;
-    }
+    if (!provider) { return; }
     const p = provider.provider;
 
     const label = await vscode.window.showInputBox({
@@ -99,18 +158,14 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
         placeHolder: "e.g. Work, Personal, Acme",
         ignoreFocusOut: true,
     });
-    if (!label) {
-        return;
-    }
+    if (!label) { return; }
 
     const baseUrl = await vscode.window.showInputBox({
         prompt: "Base URL",
         value: p.defaultBaseUrl,
         ignoreFocusOut: true,
     });
-    if (!baseUrl) {
-        return;
-    }
+    if (!baseUrl) { return; }
 
     const extra: Record<string, string> = {};
     if (p.needsExtra === "workspace") {
@@ -119,9 +174,7 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
             placeHolder: "e.g. acme-team",
             ignoreFocusOut: true,
         });
-        if (!ws) {
-            return;
-        }
+        if (!ws) { return; }
         extra.workspace = ws;
     } else if (p.needsExtra === "organization") {
         const org = await vscode.window.showInputBox({
@@ -129,9 +182,7 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
             placeHolder: "e.g. acme",
             ignoreFocusOut: true,
         });
-        if (!org) {
-            return;
-        }
+        if (!org) { return; }
         extra.organization = org;
     }
 
@@ -140,9 +191,7 @@ async function addAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Promise
         password: true,
         ignoreFocusOut: true,
     });
-    if (!token) {
-        return;
-    }
+    if (!token) { return; }
 
     const id = `${p.kind}-${slugify(label)}-${Date.now().toString(36)}`;
     const account: Account = {
@@ -178,17 +227,13 @@ async function removeAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Prom
         })),
         { placeHolder: "Account to remove", ignoreFocusOut: true }
     );
-    if (!pick) {
-        return;
-    }
+    if (!pick) { return; }
     const confirm = await vscode.window.showWarningMessage(
         `Remove "${pick.account.label}"? Token will be deleted from SecretStorage.`,
         { modal: true },
         "Remove"
     );
-    if (confirm !== "Remove") {
-        return;
-    }
+    if (confirm !== "Remove") { return; }
     await removeAccount(pick.account.id);
     await tokens.delete(pick.account.id);
     tree.refresh();
