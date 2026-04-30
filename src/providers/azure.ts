@@ -1,4 +1,5 @@
 import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
+import { probe, describeProbe } from "./http";
 
 interface AdoPullRequest {
     pullRequestId: number;
@@ -89,39 +90,52 @@ export class AzureClient implements ProviderClient {
     }
 
     async verifyToken(account: Account, token: string): Promise<TokenStatus> {
-        try {
-            const org = account.extra?.organization;
-            if (!org) {
-                return { ok: false, error: "missing organization in account" };
-            }
-            const base = account.baseUrl.replace(/\/+$/, "");
-            const headers = { Authorization: this.auth(token), Accept: "application/json" };
+        const org = account.extra?.organization;
+        if (!org) {
+            return { ok: false, error: "missing organization in account" };
+        }
+        const base = account.baseUrl.replace(/\/+$/, "");
+        const headers = { Authorization: this.auth(token), Accept: "application/json" };
 
-            // Primary probe: connectionData returns the authenticated user.
-            // api-version=1.0 is supported on every TFS since 2015 U1; cloud
-            // accepts it too. Older "7.1" was rejected with 404 on on-prem
-            // installs that didn't have the newer API surface enabled.
-            const cd = `${base}/${encodeURIComponent(org)}/_apis/connectionData?api-version=1.0`;
-            const cdRes = await fetch(cd, { headers });
-            if (cdRes.ok) {
-                const data = (await cdRes.json()) as {
+        // Try three probes in order. Any one succeeding means the credentials
+        // and base URL are usable. We surface all three failures together so
+        // the user can see exactly which URL+status returned for each.
+        const collectionCd = `${base}/${encodeURIComponent(org)}/_apis/connectionData?api-version=1.0`;
+        const collectionPj = `${base}/${encodeURIComponent(org)}/_apis/projects?api-version=1.0&$top=1`;
+        const serverCd     = `${base}/_apis/connectionData?api-version=1.0`;
+
+        const cd = await probe(collectionCd, headers);
+        if (cd.ok) {
+            // connectionData returns user info; do a second fetch to read the body.
+            try {
+                const r = await fetch(collectionCd, { headers });
+                const d = (await r.json()) as {
                     authenticatedUser?: { providerDisplayName?: string; customDisplayName?: string };
                 };
-                const u = data.authenticatedUser;
+                const u = d.authenticatedUser;
                 return { ok: true, user: u?.providerDisplayName ?? u?.customDisplayName ?? org };
-            }
-
-            // Fallback probe: /projects?$top=1. Some TFS configurations don't
-            // expose connectionData but always expose projects.
-            const pj = `${base}/${encodeURIComponent(org)}/_apis/projects?api-version=1.0&$top=1`;
-            const pjRes = await fetch(pj, { headers });
-            if (pjRes.ok) {
+            } catch {
                 return { ok: true, user: org };
             }
-            return { ok: false, error: `HTTP ${cdRes.status} (connectionData), ${pjRes.status} (projects)` };
-        } catch (e) {
-            return { ok: false, error: e instanceof Error ? e.message : String(e) };
         }
+
+        const pj = await probe(collectionPj, headers);
+        if (pj.ok) {
+            return { ok: true, user: org };
+        }
+
+        const sv = await probe(serverCd, headers);
+        if (sv.ok) {
+            // Reaching the server but not the collection usually means the
+            // collection name is wrong (case-sensitive) or the user lacks access.
+            return { ok: false, error: `Authenticated to server but collection "${org}" probe failed. Verify the collection name (case-sensitive) and that your PAT has access. Detail: ${describeProbe(cd, collectionCd)}` };
+        }
+
+        return { ok: false, error: [
+            describeProbe(cd, collectionCd),
+            describeProbe(pj, collectionPj),
+            describeProbe(sv, serverCd),
+        ].join(" | ") };
     }
 
     async listPullRequests(account: Account, _token: string, repo: RepoRef): Promise<PullItem[]> {

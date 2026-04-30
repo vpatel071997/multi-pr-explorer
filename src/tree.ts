@@ -3,6 +3,7 @@ import { Account, PullItem, TokenStatus } from "./providers/types";
 import { listAccounts } from "./config";
 import { TokenStore } from "./auth";
 import { getClient } from "./providers";
+import { describeFetchError } from "./providers/http";
 import { scanWorkspace, WorkspaceRepo, UnmatchedRepo } from "./workspace";
 
 type Section = "prs" | "issues";
@@ -293,7 +294,7 @@ export class PrTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         try {
             return await fn();
         } catch (e) {
-            return { error: e instanceof Error ? e.message : String(e) };
+            return { error: describeFetchError(e) };
         }
     }
 

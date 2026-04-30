@@ -1,4 +1,5 @@
 import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
+import { probe, describeProbe } from "./http";
 
 interface PullRequestItem {
     number: number;
@@ -92,12 +93,13 @@ export class GitHubClient implements ProviderClient {
     }
 
     async verifyToken(account: Account, token: string): Promise<TokenStatus> {
+        const url = `${apiBase(account.baseUrl)}/user`;
+        const p = await probe(url, this.headers(token));
+        if (!p.ok) {
+            return { ok: false, error: describeProbe(p, url) };
+        }
         try {
-            const url = `${apiBase(account.baseUrl)}/user`;
             const res = await fetch(url, { headers: this.headers(token) });
-            if (!res.ok) {
-                return { ok: false, error: `HTTP ${res.status}` };
-            }
             const data = (await res.json()) as { login: string };
             return { ok: true, user: data.login };
         } catch (e) {

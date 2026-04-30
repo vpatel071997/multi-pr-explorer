@@ -1,4 +1,5 @@
 import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
+import { probe, describeProbe } from "./http";
 
 interface MergeRequest {
     iid: number;
@@ -59,12 +60,16 @@ export class GitLabClient implements ProviderClient {
     }
 
     async verifyToken(account: Account, token: string): Promise<TokenStatus> {
+        const url = `${account.baseUrl.replace(/\/+$/, "")}/api/v4/user`;
+        const p = await probe(url, this.headers(token));
+        if (!p.ok) {
+            return { ok: false, error: describeProbe(p, url) };
+        }
+        // probe returned ok; re-fetch to get the body. (Could be optimized by
+        // having probe optionally return the body, but the duplicate call is
+        // fine for a 1-line /user response and keeps probe single-purpose.)
         try {
-            const url = `${account.baseUrl.replace(/\/+$/, "")}/api/v4/user`;
             const res = await fetch(url, { headers: this.headers(token) });
-            if (!res.ok) {
-                return { ok: false, error: `HTTP ${res.status}` };
-            }
             const data = (await res.json()) as { username: string };
             return { ok: true, user: data.username };
         } catch (e) {

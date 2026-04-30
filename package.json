@@ -2,7 +2,7 @@
   "name": "multi-pr-explorer",
   "displayName": "Multi-PR Explorer",
   "description": "Workspace-scoped open PRs and assigned issues/work items across GitHub, GitLab, Bitbucket Cloud, and Azure DevOps. Per-repo issue-tracker override (e.g. GitLab code + Azure DevOps tickets).",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "publisher": "vpatel071997",
   "license": "MIT",
   "engines": {

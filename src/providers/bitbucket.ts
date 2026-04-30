@@ -1,4 +1,5 @@
 import { Account, ProviderClient, PullItem, RepoRef, TokenStatus } from "./types";
+import { probe, describeProbe } from "./http";
 
 interface BbPullRequest {
     id: number;
@@ -87,20 +88,16 @@ export class BitbucketClient implements ProviderClient {
     }
 
     async verifyToken(account: Account, token: string): Promise<TokenStatus> {
+        const url = `${bbApiRoot(account.baseUrl)}/user`;
+        const headers = { Authorization: this.auth(token), Accept: "application/json" };
+        const p = await probe(url, headers);
+        if (!p.ok) {
+            return { ok: false, error: describeProbe(p, url) };
+        }
         try {
-            const url = `${bbApiRoot(account.baseUrl)}/user`;
-            const res = await fetch(url, {
-                headers: { Authorization: this.auth(token), Accept: "application/json" },
-            });
-            if (!res.ok) {
-                return { ok: false, error: `HTTP ${res.status}` };
-            }
+            const res = await fetch(url, { headers });
             const data = (await res.json()) as { username?: string; display_name?: string; nickname?: string };
             const display = data.username ?? data.nickname ?? data.display_name ?? "?";
-            // Cache the username so listIssues can build the assignee filter.
-            // Some Bitbucket token types (notably workspace-scoped API tokens)
-            // omit `username` from /user; in that case the cache stays empty
-            // and listIssues falls back to skipping the assignee filter.
             if (data.username) {
                 this.usernameByAccount.set(account.id, data.username);
             }
