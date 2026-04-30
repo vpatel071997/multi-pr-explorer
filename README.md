@@ -1,23 +1,130 @@
 # Multi-PR Explorer
 
-A VS Code extension that lists open pull/merge requests and assigned
-issues/tickets/work items for **the git repos open in your current VS Code
-window**, across **GitHub**, **GitLab**, **Bitbucket Cloud**, and
-**Azure DevOps**.
+One VS Code panel that shows the open pull/merge requests and the issues
+assigned to you for the **git repos open in your current window**, across
+**GitHub**, **GitLab**, **Bitbucket Cloud**, and **Azure DevOps**.
 
-Multi-account per provider; tokens stored in VS Code's `SecretStorage`.
+No fetching for repos outside your workspace, no broad cross-account search,
+no extra noise.
 
-## How it works (workspace-scoped, since v0.3)
+---
 
-1. The extension reads `vscode.workspace.workspaceFolders` and runs
-   `git config --get remote.origin.url` in each folder.
-2. For every detected remote, it tries each configured account's URL parser
-   to find a match.
-3. For matching repo/account pairs, it fetches **all open PRs** in the repo
-   plus **issues/work items assigned to you** in the repo (or project, for ADO).
+## Quick start
 
-Anything outside your open workspace is **not fetched**. Open a different
-folder → different list. Add/remove a workspace folder → tree auto-refreshes.
+1. **Install** the extension:
+   ```powershell
+   code --install-extension multi-pr-explorer-0.3.0.vsix
+   ```
+   Or press **F5** from the source folder for a dev-host run.
+2. Reload VS Code, then click the **Pull Requests** icon in the Activity Bar
+   on the left.
+3. Click the **+** in the panel title bar → pick a provider → fill in label,
+   base URL, (optional workspace/organization), and paste a token.
+4. Open a folder/workspace whose remote points at one of your accounts'
+   hosts. The tree populates automatically.
+5. Click any PR or issue row → opens in your default browser.
+
+The panel auto-refreshes when you add or remove workspace folders. Manual
+refresh: **circle-arrow** icon in the panel title bar.
+
+---
+
+## Generating tokens
+
+Each provider's "token" is just a Personal Access Token (or equivalent).
+Once a token is in `SecretStorage`, the extension never echoes it back —
+remove + re-add the account if you need to rotate.
+
+### GitHub (cloud or Enterprise)
+
+1. Visit **<https://github.com/settings/tokens>** (cloud) or
+   `https://YOUR-GHE-HOST/settings/tokens` (Enterprise).
+2. *Generate new token (classic)* or *Fine-grained tokens*.
+3. Required scopes:
+   - **Classic**: `repo` (full read), `read:org` if you need org repos.
+   - **Fine-grained**: select your repos, then *Repository permissions →
+     Pull requests: Read* and *Issues: Read*.
+4. Copy the token (`ghp_…` or `github_pat_…`) → paste when prompted.
+5. **Base URL**: `https://github.com` for cloud, or your full Enterprise
+   URL like `https://github.acme.com`.
+
+### GitLab (cloud or self-hosted)
+
+1. Visit **<https://gitlab.com/-/user_settings/personal_access_tokens>** or
+   `https://YOUR-GITLAB/-/user_settings/personal_access_tokens`.
+2. *Add new token*.
+3. Required scopes: **`read_api`** (or `api` if you also use this token
+   elsewhere).
+4. Copy the token (`glpat-…`) → paste when prompted.
+5. **Base URL**: `https://gitlab.com` or your self-hosted URL.
+
+### Bitbucket Cloud
+
+The extension uses Basic auth. Two options:
+
+- **App Password** (legacy but widely supported): generate at
+  **<https://bitbucket.org/account/settings/app-passwords/>**. Required
+  permissions: *Pull requests: Read*, *Issues: Read* (if used),
+  *Repositories: Read*. Paste as `your-bitbucket-username:apppassword`.
+- **API Token** (newer Atlassian-wide): generate at
+  **<https://id.atlassian.com/manage-profile/security/api-tokens>**. Paste
+  as `your-email@example.com:apitoken`.
+
+The extension always talks to `https://api.bitbucket.org` regardless of what
+you put in the **Base URL** field, so the default is fine.
+
+When prompted for a **workspace**, enter the slug from your Bitbucket URL
+(`bitbucket.org/{workspace}/{repo}`).
+
+### Azure DevOps
+
+1. Visit **<https://dev.azure.com/YOUR-ORG/_usersSettings/tokens>** (replace
+   `YOUR-ORG` with your organization slug).
+2. *New Token*.
+3. Required scopes: **Code: Read** (for PRs) + **Work Items: Read** (for
+   tickets). Set an expiration that works for you.
+4. Copy the token → paste when prompted.
+5. **Base URL**: `https://dev.azure.com`.
+6. **Organization**: the slug from your Azure DevOps URL
+   (`dev.azure.com/{organization}`).
+
+---
+
+## Day-to-day use
+
+### Looking at one repo
+
+Open the folder in VS Code → wait a beat → the matching repo shows up in
+the tree with two subsections: *Pull Requests* and *Issues / Tickets*. Click
+any row to open it in the browser.
+
+### Looking at several repos
+
+Use a multi-root workspace. *File → Add Folder to Workspace…* — every git
+folder you add becomes a top-level node in the tree. Saves to a `.code-workspace`
+file you can reopen later.
+
+### Switching accounts (e.g. work vs personal GitHub)
+
+Add both as separate accounts (different labels, same provider, same or
+different base URL). When the extension sees a workspace remote, it tries
+each configured account in order and uses the first one whose URL parser
+matches. For two accounts on the same host, that means the order of accounts
+in your settings controls which one is used — edit
+`multiPrExplorer.accounts` directly in `settings.json` to reorder.
+
+### Refreshing
+
+Manual: click the refresh icon in the panel header. Automatic: the tree
+re-fetches whenever workspace folders change or whenever the account list
+changes.
+
+### Removing an account
+
+Run *Multi-PR: Remove Account…* from the Command Palette (Ctrl+Shift+P) or
+the panel title bar. The token is deleted from `SecretStorage`.
+
+---
 
 ## Tree layout
 
@@ -26,76 +133,105 @@ folder → different list. Add/remove a workspace folder → tree auto-refreshes
   Pull Requests (3)
     #14  Refactor auth                    Alice  •  2h ago
     #12  Bump deps                        Bob    •  1d ago
+    #11  …                                Carol  •  5d ago
   Issues / Tickets (1)
     #99  Memory leak in worker            you    •  3h ago
 [repo] another-team/some-service
-  ...
+  Pull Requests (0)
+    No open PRs.
+  Issues / Tickets (0)
+    No assigned issues.
 [unmatched] disconnected-folder            ← tooltip shows the remote URL
 ```
 
-## Install / run
+- **Workspace folder names** vs. tree labels: the tree shows the
+  provider-side display name (`owner/repo` for GitHub, `org/project/repo`
+  for ADO, full path for GitLab nested groups), not the local folder name.
+  The folder name appears in the tooltip.
+- **Sorted within each section** by `updated` (most recent first).
+- **Errors** show as red × items inline — e.g. `403 Forbidden` if your token
+  lacks scope for that repo.
 
-### Dev mode
+---
+
+## Troubleshooting
+
+**Tree is empty even though I added an account.**
+You need a workspace folder whose `origin` remote matches one of your
+configured accounts' hosts. Check:
+```powershell
+git -C path\to\folder config --get remote.origin.url
+```
+The host of that URL must match the host of your account's *Base URL* (e.g.
+`github.com` ↔ `https://github.com`). The output of *Multi-PR: Refresh* will
+classify each folder as a matched repo, an unmatched folder (yellow warning
+icon), or skipped (not a git repo).
+
+**My folder shows as "unmatched".**
+Click it — the tooltip shows the remote URL. Add an account whose base URL
+matches that host and refresh.
+
+**Issues section is empty even though I have assigned issues.**
+- GitHub: confirm your token has `Issues: Read` (fine-grained) or `repo`
+  (classic). The query is `assignee=*` per-repo, so issues without an
+  assignee won't appear here by design.
+- GitLab: confirm `read_api` scope; the query is
+  `scope=assigned_to_me&state=opened`.
+- Azure DevOps: confirm *Work Items: Read* scope. The WIQL query is
+  per-project; make sure `[System.AssignedTo] = @Me` resolves to you.
+- Bitbucket Cloud: per-repo issues only show up if issue tracking is
+  enabled on that repo.
+
+**Same PR shows twice for one repo.**
+Shouldn't happen with v0.3 (per-repo queries) — open an issue with the URL
+and your provider's response if you see it.
+
+**Token revoked / 401 / 403.**
+Remove the account, generate a new token, re-add. There's no in-place token
+update yet.
+
+**Where's my token stored?**
+`vscode.SecretStorage`, keyed by `multiPrExplorer.token.<account-id>`. Not
+in settings, not in the workspace, not on disk in plaintext. The
+*Remove Account* command also deletes the secret.
+
+---
+
+## Reference: what's queried per workspace repo
+
+| Provider     | Pull requests                                                                              | Issues / tickets                                                                                     |
+|---|---|---|
+| GitHub       | `GET /repos/{owner}/{repo}/pulls?state=open`                                               | `GET /repos/{owner}/{repo}/issues?state=open&assignee=*` (PRs filtered out via `pull_request` field) |
+| GitLab       | `GET /api/v4/projects/{path}/merge_requests?state=opened`                                   | `GET /api/v4/projects/{path}/issues?state=opened&scope=assigned_to_me`                                |
+| Bitbucket    | `GET /2.0/repositories/{ws}/{repo}/pullrequests?state=OPEN`                                 | `GET /2.0/repositories/{ws}/{repo}/issues?status=new&status=open` (404 ⇒ tracker disabled, empty)    |
+| Azure DevOps | `GET /{org}/{project}/_apis/git/repositories/{repo}/pullrequests?searchCriteria.status=active` | WIQL `[System.TeamProject] = '{project}' AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed','Done','Removed','Resolved')` then batch GET `/_apis/wit/workitems` |
+
+---
+
+## Build from source
 
 ```powershell
+git clone https://github.com/vpatel071997/multi-pr-explorer.git
 cd multi-pr-explorer
 npm install
-npm run compile
+npm run compile      # plain tsc -> out/
+npm run package      # produces multi-pr-explorer-X.Y.Z.vsix
 ```
 
-Press **F5** in VS Code to launch an Extension Development Host.
+Press **F5** in VS Code to launch the Extension Development Host with the
+extension loaded — useful for iterating without packaging.
 
-### Build a redistributable VSIX
-
-```powershell
-npm run package
-```
-
-That produces `multi-pr-explorer-0.3.0.vsix`. Install via
-*Extensions → … → Install from VSIX…* or:
-
-```powershell
-code --install-extension multi-pr-explorer-0.3.0.vsix
-```
-
-## Add an account
-
-Click **`+`** in the view title bar. Prompts use `ignoreFocusOut`, so you can
-alt-tab to a browser to grab a token and the prompt will still be there.
-
-| Provider          | Base URL                              | Extra needed | Token type |
-|-------------------|---------------------------------------|--------------|------------|
-| GitHub            | `https://github.com` or GHE URL       | —            | PAT, `repo` read |
-| GitLab            | `https://gitlab.com` or self-hosted   | —            | PAT, `read_api`  |
-| Bitbucket Cloud   | `https://api.bitbucket.org`           | —            | `username:apppassword` or `email:apitoken` |
-| Azure DevOps      | `https://dev.azure.com`               | organization | PAT, *Code: Read* + *Work Items: Read* |
-
-Account metadata (label, kind, base URL, extras) lives in your settings under
-`multiPrExplorer.accounts`. Tokens are written only to `SecretStorage` and
-never appear in settings.
-
-## What gets queried per workspace repo
-
-| Provider | PRs in repo | Issues / tickets in repo |
-|---|---|---|
-| GitHub  | `GET /repos/{owner}/{repo}/pulls?state=open` | `GET /repos/{owner}/{repo}/issues?state=open&assignee=*` (PRs filtered out via the `pull_request` field) |
-| GitLab  | `GET /api/v4/projects/{path}/merge_requests?state=opened` | `GET /api/v4/projects/{path}/issues?state=opened&scope=assigned_to_me` |
-| Bitbucket | `GET /2.0/repositories/{ws}/{repo}/pullrequests?state=OPEN` | `GET /2.0/repositories/{ws}/{repo}/issues?status=new&status=open` (404 ⇒ issues disabled, treated as empty) |
-| Azure DevOps | `GET /{org}/{project}/_apis/git/repositories/{repo}/pullrequests?searchCriteria.status=active` | WIQL: `[System.TeamProject] = '{project}' AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed','Done','Removed','Resolved')` then batch GET `/_apis/wit/workitems` |
-
-Multiple workspace folders for the same ADO project will deduplicate at the
-project level for the issues query (assigned to me in the project) but each
-ADO repo gets its own PR fetch.
+---
 
 ## Limitations (v0.3)
 
-- Bitbucket **Server** (self-hosted Stash) and Azure DevOps **Server** are not
-  supported — different APIs, different auth.
+- Bitbucket **Server** (self-hosted Stash) and Azure DevOps **Server** are
+  not supported — different APIs, different auth.
 - No in-editor diff/review. Click row → opens in browser.
-- No filters / no auto-refresh / no notifications. Manual cache invalidation
-  via `Refresh`.
-- Workspace folder must have an `origin` remote pointing at a host that maps
-  to a configured account; otherwise it shows under "unmatched".
+- No filters / no auto-poll / no notifications.
+- Workspace folder must have an `origin` remote pointing at a host that
+  maps to a configured account; otherwise it shows under "unmatched".
+- One token per account. To switch tokens, remove and re-add the account.
 
 ## License
 
