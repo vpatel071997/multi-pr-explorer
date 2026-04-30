@@ -94,16 +94,31 @@ export class AzureClient implements ProviderClient {
             if (!org) {
                 return { ok: false, error: "missing organization in account" };
             }
-            const url = `${account.baseUrl.replace(/\/+$/, "")}/${encodeURIComponent(org)}/_apis/connectionData?api-version=7.1`;
-            const res = await fetch(url, { headers: { Authorization: this.auth(token), Accept: "application/json" } });
-            if (!res.ok) {
-                return { ok: false, error: `HTTP ${res.status}` };
+            const base = account.baseUrl.replace(/\/+$/, "");
+            const headers = { Authorization: this.auth(token), Accept: "application/json" };
+
+            // Primary probe: connectionData returns the authenticated user.
+            // api-version=1.0 is supported on every TFS since 2015 U1; cloud
+            // accepts it too. Older "7.1" was rejected with 404 on on-prem
+            // installs that didn't have the newer API surface enabled.
+            const cd = `${base}/${encodeURIComponent(org)}/_apis/connectionData?api-version=1.0`;
+            const cdRes = await fetch(cd, { headers });
+            if (cdRes.ok) {
+                const data = (await cdRes.json()) as {
+                    authenticatedUser?: { providerDisplayName?: string; customDisplayName?: string };
+                };
+                const u = data.authenticatedUser;
+                return { ok: true, user: u?.providerDisplayName ?? u?.customDisplayName ?? org };
             }
-            const data = (await res.json()) as {
-                authenticatedUser?: { providerDisplayName?: string; customDisplayName?: string };
-            };
-            const u = data.authenticatedUser;
-            return { ok: true, user: u?.providerDisplayName ?? u?.customDisplayName ?? "?" };
+
+            // Fallback probe: /projects?$top=1. Some TFS configurations don't
+            // expose connectionData but always expose projects.
+            const pj = `${base}/${encodeURIComponent(org)}/_apis/projects?api-version=1.0&$top=1`;
+            const pjRes = await fetch(pj, { headers });
+            if (pjRes.ok) {
+                return { ok: true, user: org };
+            }
+            return { ok: false, error: `HTTP ${cdRes.status} (connectionData), ${pjRes.status} (projects)` };
         } catch (e) {
             return { ok: false, error: e instanceof Error ? e.message : String(e) };
         }
@@ -112,7 +127,10 @@ export class AzureClient implements ProviderClient {
     async listPullRequests(account: Account, _token: string, repo: RepoRef): Promise<PullItem[]> {
         const base = account.baseUrl.replace(/\/+$/, "");
         const { org, project, repo: repoName } = repo.path;
-        const url = `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repoName)}/pullrequests?searchCriteria.status=active&api-version=7.1-preview.1&$top=100`;
+        // pullrequests: api-version=3.0 is the minimum supported (Git was
+        // added to TFS in 2017/API 3.0). Cloud accepts it too. 7.1 returned
+        // 404 on older on-prem TFS that didn't have the 7.x preview surface.
+        const url = `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repoName)}/pullrequests?searchCriteria.status=active&api-version=3.0&$top=100`;
         const res = await fetch(url, {
             headers: { Authorization: this.auth(_token), Accept: "application/json" },
         });
@@ -149,7 +167,10 @@ export class AzureClient implements ProviderClient {
                 `AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') ` +
                 `ORDER BY [System.ChangedDate] DESC`,
         };
-        const wiqlUrl = `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/wiql?api-version=7.1-preview.2`;
+        // WIQL has been a 1.0 endpoint since TFS 2015 U1; using a preview
+        // version (7.1-preview.2) caused 404 on TFS that didn't ship the
+        // newer preview surface. 1.0 works on cloud + every supported TFS.
+        const wiqlUrl = `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/wiql?api-version=1.0`;
         const wiqlRes = await fetch(wiqlUrl, {
             method: "POST",
             headers,
@@ -175,7 +196,8 @@ export class AzureClient implements ProviderClient {
         // Project-scoped URL: matches Microsoft's "List Work Items" docs and
         // is consistent with the project-scoped WIQL POST above. Some tenants
         // with stricter access rules require the project segment.
-        const wiUrl = `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/workitems?ids=${ids}&fields=${encodeURIComponent(fields)}&api-version=7.1`;
+        // api-version=1.0 supported since TFS 2015 U1.
+        const wiUrl = `${base}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/workitems?ids=${ids}&fields=${encodeURIComponent(fields)}&api-version=1.0`;
         const wiRes = await fetch(wiUrl, { headers });
         if (!wiRes.ok) {
             throw new Error(`Azure DevOps workitems ${wiRes.status}: ${await wiRes.text()}`);

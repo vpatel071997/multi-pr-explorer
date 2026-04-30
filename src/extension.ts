@@ -537,7 +537,8 @@ async function pickAdoProject(account: Account, tokens: TokenStore): Promise<str
     }
     try {
         const base = account.baseUrl.replace(/\/+$/, "");
-        const url = `${base}/${encodeURIComponent(org)}/_apis/projects?api-version=7.1&$top=200`;
+        // api-version=1.0 is supported on every TFS since 2015 U1 and on cloud.
+        const url = `${base}/${encodeURIComponent(org)}/_apis/projects?api-version=1.0&$top=200`;
         const auth = "Basic " + Buffer.from(":" + token).toString("base64");
         const res = await fetch(url, { headers: { Authorization: auth } });
         if (!res.ok) { throw new Error(`${res.status}: ${await res.text()}`); }
