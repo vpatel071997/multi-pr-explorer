@@ -93,39 +93,47 @@ When prompted for a **workspace**, enter the slug from your Bitbucket URL
 ## Mixing providers (GitLab code + Azure DevOps tickets)
 
 Common setup: code lives on GitLab (so PRs/MRs come from there) but tickets
-live in Azure DevOps Boards. Wire it up like this:
+live in Azure DevOps Boards.
 
-1. **Add both accounts** — one GitLab account, one Azure DevOps account.
-   Note the ADO account's **label** (we'll use it in the override below).
-2. **Map the issue tracker.** Open `settings.json` (Ctrl+Shift+P →
-   *Preferences: Open User Settings (JSON)*) and add:
-   ```json
-   "multiPrExplorer.issueTrackerMap": [
-     {
-       "matches": "gitlab.acme.com",
-       "account": "Work ADO",
-       "project": "Backend"
-     }
-   ]
-   ```
-   - `matches` is a substring of the repo's git remote URL (case-insensitive).
-     `gitlab.acme.com/team/` works if you only want a subset; `gitlab.acme.com`
-     covers the whole instance.
-   - `account` accepts either the account's **label** or its **id** (the
-     `id` field under `multiPrExplorer.accounts`). Label is friendlier;
-     id is stable across renames.
-   - `project` is the Azure DevOps Team Project you want assigned tickets
-     for. Required when the target account is Azure DevOps.
-3. **Refresh** — the affected repos will show *Pull Requests* from GitLab
-   and *Issues / Tickets* from ADO. The repo node's description shows
-   `issues→Work ADO` so you can tell at a glance the override is active.
+### Easy way — UI wizard (v0.5+)
 
-Multiple overrides are supported. The first matching entry wins, so put more
-specific patterns above broader ones.
+1. Add both accounts — one GitLab, one Azure DevOps.
+2. Open a workspace folder cloned from your GitLab. The repo appears in the
+   tree.
+3. **Right-click the repo node → *Map Issue Tracker…***
+   (or run **Multi-PR: Map Issue Tracker…** from the command palette).
+4. The wizard walks you through:
+   - Scope: *just this repo* vs *all repos at this host*.
+   - Account: pick the Azure DevOps account.
+   - Project: a list of your ADO projects is fetched automatically and
+     shown as a quickpick. If the API call fails (e.g. token can't list
+     projects), it falls back to a manual input.
+5. Done. The repo node's description shows `issues→Work ADO` and the
+   tree refreshes.
+
+To remove or edit overrides later, run **Multi-PR: Manage Issue Tracker
+Overrides…** (or use the view title's *…* menu).
+
+### Manual way — `settings.json`
+
+The wizard writes the same shape; you can edit it by hand if you prefer:
+
+```jsonc
+"multiPrExplorer.issueTrackerMap": [
+  {
+    "matches": "gitlab.acme.com",        // case-insensitive substring of the remote URL
+    "account": "Work ADO",                // account label or id
+    "project": "Backend"                  // ADO Team Project (required for azure)
+  }
+]
+```
+
+Multiple overrides are supported. The first matching entry wins, so put
+more specific patterns above broader ones.
 
 If the override target can't be resolved (typo in `account`, missing
 `project`), the tree falls back to using the same account for issues as for
-PRs and the description tag isn't shown.
+PRs and the `issues→` tag isn't shown.
 
 ## Day-to-day use
 
@@ -271,7 +279,7 @@ extension loaded — useful for iterating without packaging.
 
 ---
 
-## Limitations (v0.4)
+## Limitations (v0.5)
 
 - Bitbucket **Server** (self-hosted Stash) and Azure DevOps **Server** are
   not supported — different APIs, different auth.

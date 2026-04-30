@@ -1,8 +1,16 @@
 import * as vscode from "vscode";
 import { TokenStore } from "./auth";
-import { addAccount, listAccounts, removeAccount, getRefreshIntervalMinutes } from "./config";
+import {
+    addAccount,
+    listAccounts,
+    removeAccount,
+    getRefreshIntervalMinutes,
+    listIssueOverrides,
+    IssueOverride,
+} from "./config";
 import { PrTreeProvider } from "./tree";
 import { Account, ProviderKind, PullItem } from "./providers/types";
+import { scanWorkspace, WorkspaceRepo } from "./workspace";
 
 interface ProviderChoice {
     label: string;
@@ -83,6 +91,12 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         ),
         vscode.commands.registerCommand("multiPrExplorer.removeAccount", () =>
             removeAccountFlow(tokens, tree)
+        ),
+        vscode.commands.registerCommand("multiPrExplorer.mapIssueTracker", (node?: { repo?: WorkspaceRepo }) =>
+            mapIssueTrackerFlow(tokens, tree, node?.repo)
+        ),
+        vscode.commands.registerCommand("multiPrExplorer.manageIssueTrackers", () =>
+            manageIssueTrackerFlow(tree)
         ),
     );
 
@@ -241,4 +255,180 @@ async function removeAccountFlow(tokens: TokenStore, tree: PrTreeProvider): Prom
 
 function slugify(s: string): string {
     return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "account";
+}
+
+// ── Issue tracker mapping wizard ──────────────────────────────────────────────
+
+async function mapIssueTrackerFlow(
+    tokens: TokenStore,
+    tree: PrTreeProvider,
+    presetRepo?: WorkspaceRepo,
+): Promise<void> {
+    const accounts = listAccounts();
+    if (accounts.length === 0) {
+        vscode.window.showErrorMessage("Add at least one account first.");
+        return;
+    }
+
+    // Step 1: pick a repo (skip if invoked from a repo-node context menu).
+    let repo: WorkspaceRepo | undefined = presetRepo;
+    if (!repo) {
+        const scan = await scanWorkspace(accounts);
+        if (scan.repos.length === 0) {
+            vscode.window.showErrorMessage("No matched workspace repos. Open a folder whose remote matches a configured account first.");
+            return;
+        }
+        const pick = await vscode.window.showQuickPick(
+            scan.repos.map(r => ({
+                label: r.ref.displayName,
+                description: `${r.account.label} • ${r.account.kind}`,
+                detail: r.remoteUrl,
+                repo: r,
+            })),
+            { placeHolder: "Which workspace repo should use a different issue tracker?", ignoreFocusOut: true }
+        );
+        if (!pick) { return; }
+        repo = pick.repo;
+    }
+
+    // Step 2: scope — this repo only, or all repos at this host.
+    const host = hostOf(repo.remoteUrl);
+    const scopePick = await vscode.window.showQuickPick(
+        [
+            { label: `Just this repo`, description: repo.ref.displayName, scope: "repo" as const },
+            { label: `All repos at ${host}`, description: "broader override; first-match-wins ordering applies", scope: "host" as const },
+        ],
+        { placeHolder: "How broadly should this override apply?", ignoreFocusOut: true }
+    );
+    if (!scopePick) { return; }
+    const matches = scopePick.scope === "repo"
+        ? trimRemoteForMatch(repo.remoteUrl)
+        : host;
+
+    // Step 3: pick the issue account.
+    const accPick = await vscode.window.showQuickPick(
+        accounts.map(a => ({
+            label: a.label,
+            description: `${a.kind} • ${shortHost(a.baseUrl)}`,
+            account: a,
+        })),
+        { placeHolder: "Which account should provide issues for this repo?", ignoreFocusOut: true }
+    );
+    if (!accPick) { return; }
+    const target = accPick.account;
+
+    // Step 4: ADO needs a Team Project; for other kinds, skip.
+    let project: string | undefined;
+    if (target.kind === "azure") {
+        project = await pickAdoProject(target, tokens);
+        if (!project) { return; }
+    }
+
+    // Step 5: persist (User scope, dedupe-by-matches).
+    const cfg = vscode.workspace.getConfiguration("multiPrExplorer");
+    const current: IssueOverride[] = cfg.get<IssueOverride[]>("issueTrackerMap") ?? [];
+    const filtered = current.filter(o => o.matches.toLowerCase() !== matches.toLowerCase());
+    const newEntry: IssueOverride = { matches, account: target.label, ...(project ? { project } : {}) };
+    filtered.unshift(newEntry);
+    await cfg.update("issueTrackerMap", filtered, vscode.ConfigurationTarget.Global);
+
+    tree.refresh();
+    vscode.window.showInformationMessage(
+        `Mapped: ${matches} → ${target.label}${project ? ` / ${project}` : ""}`
+    );
+}
+
+async function manageIssueTrackerFlow(tree: PrTreeProvider): Promise<void> {
+    const overrides = listIssueOverrides();
+    if (overrides.length === 0) {
+        vscode.window.showInformationMessage(
+            "No issue tracker overrides configured. Use 'Multi-PR: Map Issue Tracker…' to add one."
+        );
+        return;
+    }
+    const pick = await vscode.window.showQuickPick(
+        overrides.map(o => ({
+            label: `${o.matches} → ${o.account}${o.project ? ` / ${o.project}` : ""}`,
+            override: o,
+        })),
+        { placeHolder: "Select an override to remove", ignoreFocusOut: true }
+    );
+    if (!pick) { return; }
+
+    const confirm = await vscode.window.showWarningMessage(
+        `Remove override "${pick.label}"?`,
+        { modal: true },
+        "Remove"
+    );
+    if (confirm !== "Remove") { return; }
+
+    const cfg = vscode.workspace.getConfiguration("multiPrExplorer");
+    const current: IssueOverride[] = cfg.get<IssueOverride[]>("issueTrackerMap") ?? [];
+    const filtered = current.filter(o =>
+        !(o.matches === pick.override.matches &&
+          o.account === pick.override.account &&
+          (o.project ?? "") === (pick.override.project ?? ""))
+    );
+    await cfg.update("issueTrackerMap", filtered, vscode.ConfigurationTarget.Global);
+    tree.refresh();
+    vscode.window.showInformationMessage("Override removed.");
+}
+
+/** Try to enumerate ADO projects via API; fall back to manual InputBox on any failure. */
+async function pickAdoProject(account: Account, tokens: TokenStore): Promise<string | undefined> {
+    const token = await tokens.get(account.id);
+    const org = account.extra?.organization;
+    if (!token || !org) {
+        return vscode.window.showInputBox({
+            prompt: "Azure DevOps Team Project name",
+            ignoreFocusOut: true,
+        });
+    }
+    try {
+        const base = account.baseUrl.replace(/\/+$/, "");
+        const url = `${base}/${encodeURIComponent(org)}/_apis/projects?api-version=7.1&$top=200`;
+        const auth = "Basic " + Buffer.from(":" + token).toString("base64");
+        const res = await fetch(url, { headers: { Authorization: auth } });
+        if (!res.ok) { throw new Error(`${res.status}: ${await res.text()}`); }
+        const data = (await res.json()) as { value: { name: string }[] };
+        const names = data.value.map(p => p.name).sort((a, b) => a.localeCompare(b));
+        if (names.length === 0) {
+            return vscode.window.showInputBox({
+                prompt: "Azure DevOps Team Project name (no projects returned by API)",
+                ignoreFocusOut: true,
+            });
+        }
+        return vscode.window.showQuickPick(names, {
+            placeHolder: `Select Team Project from ${org} (${names.length} found)`,
+            ignoreFocusOut: true,
+        });
+    } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return vscode.window.showInputBox({
+            prompt: `Couldn't list ADO projects (${msg}). Enter the project name manually.`,
+            ignoreFocusOut: true,
+        });
+    }
+}
+
+// ── Helpers used by the wizards ──────────────────────────────────────────────
+
+function hostOf(url: string): string {
+    const stripped = url.replace(/^[^@]+@/, "").replace(/^https?:\/\//i, "");
+    return stripped.split(/[/:]/)[0].toLowerCase();
+}
+
+function shortHost(url: string): string {
+    return url.replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+}
+
+/** Build a "this repo only" matches substring from a remote URL: host + path. */
+function trimRemoteForMatch(url: string): string {
+    const cleaned = url
+        .replace(/^[^@]+@/, "")          // ssh user@
+        .replace(/^https?:\/\//i, "")    // http(s)://
+        .replace(/\.git$/, "")           // .git suffix
+        .replace(/\/+$/, "")             // trailing slashes
+        .replace(":", "/");              // ssh host:path → host/path
+    return cleaned.toLowerCase();
 }
