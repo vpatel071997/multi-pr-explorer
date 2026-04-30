@@ -1,0 +1,140 @@
+{
+  "name": "multi-pr-explorer",
+  "displayName": "Multi-PR Explorer",
+  "description": "List open pull/merge requests across GitHub, GitLab, Bitbucket Cloud, and Azure DevOps in one VS Code tree view.",
+  "version": "0.1.0",
+  "publisher": "vpatel071997",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onView:multiPrExplorer.tree"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "multiPrExplorer",
+          "title": "Pull Requests",
+          "icon": "$(git-pull-request)"
+        }
+      ]
+    },
+    "views": {
+      "multiPrExplorer": [
+        {
+          "id": "multiPrExplorer.tree",
+          "name": "Open PRs / MRs",
+          "icon": "$(git-pull-request)"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "multiPrExplorer.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.addAccount",
+        "title": "Add Account…",
+        "icon": "$(add)",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.removeAccount",
+        "title": "Remove Account…",
+        "category": "Multi-PR"
+      },
+      {
+        "command": "multiPrExplorer.openItem",
+        "title": "Open in Browser",
+        "category": "Multi-PR"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "multiPrExplorer.refresh",
+          "when": "view == multiPrExplorer.tree",
+          "group": "navigation@1"
+        },
+        {
+          "command": "multiPrExplorer.addAccount",
+          "when": "view == multiPrExplorer.tree",
+          "group": "navigation@2"
+        },
+        {
+          "command": "multiPrExplorer.removeAccount",
+          "when": "view == multiPrExplorer.tree",
+          "group": "1_modify"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Multi-PR Explorer",
+      "properties": {
+        "multiPrExplorer.accounts": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Configured provider accounts. Use the **Add Account** action in the view title bar to manage. Tokens are stored separately in VS Code SecretStorage and never written to settings.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "kind",
+              "baseUrl"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique identifier for this account; used as the SecretStorage key for the token."
+              },
+              "label": {
+                "type": "string",
+                "description": "Display label shown in the tree."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "github",
+                  "gitlab",
+                  "bitbucket",
+                  "azure"
+                ],
+                "description": "Provider type."
+              },
+              "baseUrl": {
+                "type": "string",
+                "description": "Provider base URL. github.com / gitlab.com for SaaS, full URL for self-hosted."
+              },
+              "extra": {
+                "type": "object",
+                "description": "Provider-specific extras (Bitbucket: workspace; Azure: organization)."
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "typescript": "^5.3.0"
+  }
+}
